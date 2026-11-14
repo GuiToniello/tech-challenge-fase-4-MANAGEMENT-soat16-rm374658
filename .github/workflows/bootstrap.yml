@@ -1,0 +1,54 @@
+name: Bootstrap
+# Sobe o ambiente inteiro, na ordem: testes → VPC/EKS/API Gateway → addons → RDS → imagem no ECR → manifests.
+# Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
+# Depois dele, rode o Deploy do repo LAMBDA (as Lambdas usam a VPC e o RDS criados aqui).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Primeiro, para falhar antes de criar recursos pagos
+  build-test:
+    uses: ./.github/workflows/_build-test.yml
+
+  terraform-foundation:
+    needs: build-test
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/foundation
+      command: apply
+    secrets: inherit
+
+  terraform-addons:
+    needs: terraform-foundation
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/addons
+      command: apply
+    secrets: inherit
+
+  terraform-db:
+    needs: terraform-addons
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: DB/infra
+      command: apply
+    secrets: inherit
+
+  build-push:
+    needs: terraform-db
+    uses: ./.github/workflows/_build-push.yml
+    with:
+      image-tag: latest # os manifests em kubernetes/k8s usam :latest
+    secrets: inherit
+
+  k8s-apply:
+    needs: build-push
+    uses: ./.github/workflows/_k8s-apply.yml
+    with:
+      command: apply
+      restart-pods: true
+    secrets: inherit

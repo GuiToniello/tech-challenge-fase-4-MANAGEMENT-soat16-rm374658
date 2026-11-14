@@ -1,0 +1,163 @@
+name: Deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Pushes na main rodam um de cada vez, na ordem: um push antigo não aplica a infra nem publica :latest depois de um mais novo
+concurrency:
+  group: ${{ github.event_name == 'push' && 'deploy-main' || format('deploy-pr-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  # ---------- Pull Request e push ----------
+
+  # PR: check obrigatório ("build-test / build-test"). Push: valida antes de publicar a imagem
+  build-test:
+    uses: ./.github/workflows/_build-test.yml
+
+  # ---------- Pull Request ----------
+
+  # Checks obrigatórios da main: não usam credenciais AWS
+  validate-foundation:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/foundation
+      command: validate
+    secrets: inherit
+
+  validate-addons:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/addons
+      command: validate
+    secrets: inherit
+
+  validate-db:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: DB/infra
+      command: validate
+    secrets: inherit
+
+  validate-k8s:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_k8s-apply.yml
+    with:
+      command: validate
+    secrets: inherit
+
+  # Informativos: dependem da AWS (o plan do addons e o do DB exigem o cluster EKS de pé). Não rodam em PR de fork (sem secrets)
+  plan-foundation:
+    needs: validate-foundation
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/foundation
+      command: plan
+    secrets: inherit
+
+  plan-addons:
+    needs: validate-addons
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/addons
+      command: plan
+    secrets: inherit
+
+  plan-db:
+    needs: validate-db
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: DB/infra
+      command: plan
+    secrets: inherit
+
+  # ---------- Push na main ----------
+
+  # Aplica só as partes que mudaram, sempre na ordem: foundation → addons → DB → imagem → manifests
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      infra: ${{ steps.filter.outputs.infra }}
+      db: ${{ steps.filter.outputs.db }}
+      k8s: ${{ steps.filter.outputs.k8s }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'server/**'
+              - 'docker-compose.yml'
+              - '.github/workflows/_build-test.yml'
+              - '.github/workflows/_build-push.yml'
+            infra:
+              - 'kubernetes/infra/**'
+              - '.github/workflows/_terraform.yml'
+            db:
+              - 'DB/infra/**'
+              - '.github/workflows/_terraform.yml'
+            k8s:
+              - 'kubernetes/k8s/**'
+              - '.github/workflows/_k8s-apply.yml'
+
+  apply-foundation:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/foundation
+      command: apply
+    secrets: inherit
+
+  apply-addons:
+    needs: [changes, apply-foundation]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.infra == 'true' }}
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: kubernetes/infra/addons
+      command: apply
+    secrets: inherit
+
+  # O RDS usa a VPC, as subnets e o SG dos nodes criados pela foundation
+  apply-db:
+    needs: [changes, apply-addons]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.db == 'true' }}
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: DB/infra
+      command: apply
+    secrets: inherit
+
+  build-push:
+    needs: [changes, build-test, apply-db]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.app == 'true' }}
+    uses: ./.github/workflows/_build-push.yml
+    with:
+      image-tag: latest # os manifests em kubernetes/k8s usam :latest
+    secrets: inherit
+
+  # Sempre com restart: a imagem usa a tag fixa latest, e ConfigMaps/Secret não têm hash no nome.
+  # Roda também quando a infra ou o RDS mudam (cluster recriado ou endpoint novo do RDS no Secret)
+  apply-k8s:
+    needs: [changes, build-push]
+    if: ${{ !failure() && !cancelled() && (needs.changes.outputs.k8s == 'true' || needs.changes.outputs.app == 'true' || needs.changes.outputs.db == 'true' || needs.changes.outputs.infra == 'true') }}
+    uses: ./.github/workflows/_k8s-apply.yml
+    with:
+      command: apply
+      restart-pods: true
+    secrets: inherit

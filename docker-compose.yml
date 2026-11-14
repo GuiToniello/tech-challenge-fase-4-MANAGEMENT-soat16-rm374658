@@ -1,0 +1,42 @@
+﻿services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: oficina-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-oficina}
+      POSTGRES_USER: ${POSTGRES_USER:-sa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-P@ssw0rd123}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sa} -d ${POSTGRES_DB:-oficina}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  management-api:
+    image: ${REGISTRY_PREFIX:-}techchallenge-oficina-management:${IMAGE_TAG:-latest}
+    build:
+      context: ./server
+      dockerfile: 1 - Frameworks & Drivers/TechChallenge.Oficina.Management.API/Dockerfile
+    container_name: oficina-management-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      ASPNETCORE_URLS: ${ASPNETCORE_URLS:-http://+:8080}
+      AllowedHosts: ${ALLOWED_HOSTS:-*}
+      Serilog__MinimumLevel__Default: ${LOG_LEVEL_DEFAULT:-Information}
+      Serilog__MinimumLevel__Override__Microsoft.AspNetCore: ${LOG_LEVEL_ASPNETCORE:-Warning}
+      DatabaseSettings__ConnectionString: ${DATABASE_CONNECTION_STRING:-Host=postgres;Port=5432;Database=oficina;Username=sa;Password=P@ssw0rd123}
+      ResendSettings__ApiKey: ${RESEND_API_KEY}
+    ports:
+      - "${API_MANAGEMENT_PORT:-7194}:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
