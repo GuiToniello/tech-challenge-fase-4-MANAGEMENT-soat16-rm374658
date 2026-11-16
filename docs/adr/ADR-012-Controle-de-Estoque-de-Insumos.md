@@ -1,21 +1,22 @@
 # ADR-012: Controle de Estoque de Insumos
 
-**Status**: Aceita
+**Status**: Aceita (atualizada na fase 4: o orçamento e o estoque continuam na Management, nas rotas `/api/orcamentos/{ordemServicoId}`, e a OS mudou para o OS Service, ver [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) e [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md))
 
 **Contexto**:
 O sistema de oficina gerencia ordens de serviço que consomem insumos (peças, óleos, filtros, etc.). Cada serviço possui itens que referenciam insumos com quantidade necessária. Atualmente, não há controle de disponibilidade de estoque ao gerar orçamentos ou ao aprovar e iniciar a execução de ordens de serviço, podendo resultar em orçamentos inviáveis ou execução sem recursos.
 
 **Decisão**:
 
-1. **Verificação ao Gerar Orçamento**:
+1. **Verificação ao Gerar Orçamento** (`POST /api/orcamentos/{ordemServicoId}/gerar`):
    - Antes de gerar o orçamento, o sistema deve verificar se há estoque suficiente de todos os insumos necessários.
    - A verificação é apenas informativa, **sem reservar** os insumos.
    - Se houver estoque insuficiente, lança `DomainException` impedindo a geração do orçamento.
 
-2. **Débito ao Aprovar Orçamento**:
-   - Ao aprovar o orçamento (mudança de status para `EmExecucao`), o sistema deve **debitar automaticamente** a quantidade de insumos do estoque.
+2. **Débito ao Aprovar Orçamento** (`POST /api/orcamentos/{ordemServicoId}/aprovar`):
+   - Ao aprovar o orçamento, o sistema deve **debitar automaticamente** a quantidade de insumos do estoque.
    - Antes de debitar, o sistema verifica novamente a disponibilidade (o estoque pode ter mudado entre geração e aprovação).
    - Se houver estoque insuficiente no momento da aprovação, lança `DomainException` impedindo a aprovação.
+   - Desde a fase 4, o débito acontece na Management, e a mudança de status da OS para `EmExecucao` acontece depois, no OS Service, quando ele consome o evento `OrcamentoAprovado` (ADR-020).
 
 3. **Sem Sistema de Reservas**:
    - Não há reserva de insumos entre a geração do orçamento e a aprovação.
@@ -23,7 +24,7 @@ O sistema de oficina gerencia ordens de serviço que consomem insumos (peças, �
 
 4. **Caso de Uso de Estoque**:
 	- Interface `IEstoqueUseCases` no projeto **Application (UseCases)** (contrato da orquestração de estoque).
-	- Implementação `EstoqueUseCases` no projeto **Application (UseCases)**, consumida pelo fluxo de ordem de serviço via `IOrdemServicoUseCasesFacade`.
+	- Implementação `EstoqueUseCases` no projeto **Application (UseCases)**, consumida pelo fluxo de orçamento (`OrcamentoUseCases`) via `IOrcamentoUseCasesFacade`. Ela recebe os serviços da OS, carregados a partir dos ids guardados na referência da OS.
 	- Justificativa: a lógica cruza múltiplos insumos e requer acesso a portas de saída (Gateways), não cabendo em uma única entidade.
 
 5. **Métodos na Entidade `Insumo`**:
@@ -45,36 +46,48 @@ O sistema de oficina gerencia ordens de serviço que consomem insumos (peças, �
 - ⚠ Orçamentos gerados podem ficar inviáveis se o estoque for consumido por outras ordens antes da aprovação.
 - ⚠ Sem histórico de movimentações (aceito pelo negócio).
 
-**Fluxo de Uso**:
+**Fluxo de Uso** (resumo de `OrcamentoUseCases`, na Management):
 
 ```csharp
 // 1. Gerar Orçamento
-public async Task<OrdemServicoViewModel> GerarOrcamentoAsync(AlterarStatusOrdemServicoCommand command, CancellationToken cancellationToken = default)
+public async Task<OrcamentoViewModel> GerarAsync(GerarOrcamentoCommand command, CancellationToken cancellationToken = default)
 {
-	var ordemServico = await ObterOrdemServicoExistenteAsync(command.Id, cancellationToken);
+	var referencia = await ObterReferenciaExistenteAsync(command.OrdemServicoId, cancellationToken);
+	referencia.ValidarGeracaoOrcamento();
+	// ...
+	var servicos = await ObterServicosAsync(referencia.ServicoIds, cancellationToken);
 
 	// Verifica estoque (sem reservar)
-	await _ordemServicoServicesFacade.EstoqueService.VerificarDisponibilidadeParaOrcamentoAsync(ordemServico.Servicos, cancellationToken);
+	await _facade.EstoqueUseCases.VerificarDisponibilidadeParaOrcamentoAsync(servicos, cancellationToken);
 
-	ordemServico.GerarOrcamento();
-	await _ordemServicoGateway.AtualizarAsync(ordemServico, cancellationToken);
-	return _mapper.Map<OrdemServicoViewModel>(ordemServico);
+	// Cria (ou gera de novo) o orçamento, grava e publica OrcamentoGerado para o OS Service
+	// ...
 }
 
 // 2. Aprovar Orçamento
-public async Task<OrdemServicoViewModel> AprovarOrcamentoAsync(AlterarStatusOrdemServicoCommand command, CancellationToken cancellationToken = default)
+public async Task<OrcamentoViewModel> AprovarAsync(AprovarOrcamentoCommand command, CancellationToken cancellationToken = default)
 {
-	var ordemServico = await ObterOrdemServicoExistenteAsync(command.Id, cancellationToken);
+	var orcamento = await ObterOrcamentoExistenteAsync(command.OrdemServicoId, cancellationToken);
+	orcamento.ValidarAprovacao();
+
+	var referencia = await ObterReferenciaExistenteAsync(orcamento.OrdemServicoId, cancellationToken);
+	referencia.ValidarAprovacaoOrcamento();
+
+	var servicos = await ObterServicosAsync(referencia.ServicoIds, cancellationToken);
 
 	// Verifica novamente (estoque pode ter mudado)
-	await _ordemServicoServicesFacade.EstoqueService.VerificarDisponibilidadeParaOrcamentoAsync(ordemServico.Servicos, cancellationToken);
+	await _facade.EstoqueUseCases.VerificarDisponibilidadeParaOrcamentoAsync(servicos, cancellationToken);
 
 	// Debita do estoque
-	await _ordemServicoServicesFacade.EstoqueService.DebitarEstoqueParaOrdemServicoAsync(ordemServico.Servicos, cancellationToken);
+	await _facade.EstoqueUseCases.DebitarEstoqueParaOrdemServicoAsync(servicos, cancellationToken);
 
-	ordemServico.AprovarOrcamento();
-	await _ordemServicoGateway.AtualizarAsync(ordemServico, cancellationToken);
-	return _mapper.Map<OrdemServicoViewModel>(ordemServico);
+	orcamento.Aprovar();
+	await _orcamentoGateway.AtualizarAsync(orcamento, cancellationToken);
+
+	// O OS Service leva a OS para EmExecucao ao consumir este evento (ADR-020)
+	await _facade.EventosPublisher.PublicarAsync(new OrcamentoAprovado(orcamento.OrdemServicoId), orcamento.OrdemServicoId, cancellationToken);
+
+	return _mapper.Map<OrcamentoViewModel>(orcamento);
 }
 ```
 
@@ -113,3 +126,4 @@ public void DebitarEstoque(int quantidade)
 - **ADR-002**: Entidades ricas com lógica de negócio encapsulada.
 - **ADR-004**: Portas de saída (Gateways) de persistência no projeto Application (UseCases) com implementação no projeto DB.
 - **ADR-005**: Casos de uso e contratos segregados no projeto Application (UseCases).
+- **ADR-020**: o resultado do orçamento chega ao OS Service por evento (`OrcamentoGerado`, `OrcamentoAprovado` e `OrcamentoRecusado`): [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).

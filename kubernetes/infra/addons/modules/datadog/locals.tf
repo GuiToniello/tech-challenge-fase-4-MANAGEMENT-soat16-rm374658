@@ -1,7 +1,9 @@
 locals {
-  # Prefixo da rota no API Gateway -> service no Datadog (nome do Deployment em kubernetes/k8s/features).
+  # Prefixo da rota no API Gateway -> service no Datadog (nome do Deployment em kubernetes/k8s/features
+  # deste repo e do repo OS-SERVICE).
   services = {
     management = "management-api"
+    os         = "os-service-api"
   }
 
   common_tags = [

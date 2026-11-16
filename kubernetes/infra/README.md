@@ -99,7 +99,7 @@ kubectl get pods -A
 
 Os manifests da API ficam em [k8s/](../k8s), e o passo a passo está em [k8s/README.md](../k8s/README.md). Antes de aplicá-los, é preciso ter o RDS criado pelo `DB/infra` ([DB/README.md](../../DB/README.md)) e a imagem da Management API publicada no ECR (repositório `techchallenge-oficina-management`). O Bootstrap faz os dois antes de aplicar os manifests.
 
-O caminho recomendado é o workflow **K8s Apply**, que descobre o endpoint do RDS, gera o `kubernetes/k8s/.env` a partir dos secrets do GitHub e roda `kubectl apply -k kubernetes/k8s`. Aplique sempre com `-k` (e não `-f` por pasta), porque o Secret `oficina-api-secrets` é gerado pelo Kustomize a partir do `kubernetes/k8s/.env`.
+O caminho recomendado é o workflow **K8s Apply**, que descobre o endpoint do RDS, gera o `kubernetes/k8s/.env` a partir dos secrets do GitHub e da chave do SQS guardada no SSM (`/techchallenge-oficina/sqs/management/*`, criada pelo `SQS/infra`, veja o [SQS/README.md](../../SQS/README.md)) e roda `kubectl apply -k kubernetes/k8s`. Aplique sempre com `-k` (e não `-f` por pasta), porque o Secret `oficina-api-secrets` é gerado pelo Kustomize a partir do `kubernetes/k8s/.env`.
 
 Valide:
 
@@ -129,7 +129,7 @@ terraform providers lock -platform=linux_amd64 -platform=windows_amd64
 
 ## 8. Destrua o ambiente
 
-Antes, rode o Destroy do repo [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658) e destrua o RDS (`DB/infra`, veja o [DB/README.md](../../DB/README.md)). O RDS usa as subnets privadas e referencia o SG dos nodes: com ele de pé, o destroy da foundation falha com `DependencyViolation`.
+Antes, rode o Destroy dos repos [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658) e [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) (o RDS do OS Service também usa as subnets privadas e o SG dos nodes) e destrua o RDS da Management (`DB/infra`, veja o [DB/README.md](../../DB/README.md)). O RDS usa as subnets privadas e referencia o SG dos nodes: com ele de pé, o destroy da foundation falha com `DependencyViolation`. As filas do SQS (`SQS/infra`) não dependem da VPC e podem ser destruídas a qualquer momento.
 
 Depois, para evitar custos:
 1. Destrua os addons. Isso remove o Datadog Agent e os recursos do Datadog, então defina antes as chaves do Datadog, como na seção 4.
@@ -147,4 +147,4 @@ terraform destroy -var-file="terraform.tfvars"
 Pop-Location
 ```
 
-No CI, o workflow **Destroy** faz tudo isso, na ordem: confere que o SG `techchallenge-oficina-lambda-sg` (repo LAMBDA) já foi removido e destrói o RDS (`DB/infra`), os addons e a foundation. O destroy da foundation roda mesmo se o dos addons falhar (por exemplo, com chaves do Datadog revogadas), para o EKS não ficar ligado gerando custo; nesse caso, veja o troubleshooting do [DATADOG.md](DATADOG.md#8-troubleshooting). O bucket S3 do state e o ECR (repositório `techchallenge-oficina-management`, criado manualmente) não são gerenciados pelo Terraform e ficam fora do `destroy`.
+No CI, o workflow **Destroy** faz tudo isso, na ordem: confere que o SG `techchallenge-oficina-lambda-sg` (repo LAMBDA) e o RDS/SG `techchallenge-oficina-os-postgres`/`techchallenge-oficina-os-rds-sg` (repo OS-SERVICE) já foram removidos e destrói o SQS (`SQS/infra`), o RDS (`DB/infra`), os addons e a foundation. O destroy da foundation roda mesmo se o dos addons falhar (por exemplo, com chaves do Datadog revogadas), para o EKS não ficar ligado gerando custo; nesse caso, veja o troubleshooting do [DATADOG.md](DATADOG.md#8-troubleshooting). O bucket S3 do state e o ECR (repositório `techchallenge-oficina-management`, criado manualmente) não são gerenciados pelo Terraform e ficam fora do `destroy`.

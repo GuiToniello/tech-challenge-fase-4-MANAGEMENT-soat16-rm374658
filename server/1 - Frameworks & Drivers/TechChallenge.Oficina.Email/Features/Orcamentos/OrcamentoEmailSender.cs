@@ -2,10 +2,10 @@ using System.Globalization;
 using System.Text;
 using Resend;
 using TechChallenge.Oficina.Entities.Exceptions;
-using TechChallenge.Oficina.Entities.Features.OrdensServico;
-using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
+using TechChallenge.Oficina.Entities.Features.Orcamentos;
+using TechChallenge.Oficina.Entities.Features.Orcamentos.Enums;
 using TechChallenge.Oficina.Email.Configuration;
-using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
+using TechChallenge.Oficina.UseCases.Features.Orcamentos.UseCases;
 
 namespace TechChallenge.Oficina.Email.Features.Orcamentos;
 
@@ -20,20 +20,17 @@ public sealed class OrcamentoEmailSender : IOrcamentoEmailSender
         _resendSettings = resendSettings;
     }
 
-    public async Task EnviarOrcamentoAsync(OrdemServico ordemServico, string emailDestino, CancellationToken cancellationToken = default)
+    public async Task EnviarOrcamentoAsync(Orcamento orcamento, string emailDestino, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(orcamento);
+
         if (string.IsNullOrWhiteSpace(_resendSettings.ApiKey) || string.IsNullOrWhiteSpace(_resendSettings.FromEmail))
         {
             throw new DomainException("Servico de email nao esta configurado. Verifique as configuracoes do Resend.");
         }
 
-        if (ordemServico.Orcamento is null)
-        {
-            throw new DomainException("A ordem de servico informada nao possui orcamento gerado.");
-        }
-
-        var assunto = CriarAssunto(ordemServico);
-        var html = CriarHtml(ordemServico);
+        var assunto = CriarAssunto(orcamento);
+        var html = CriarHtml(orcamento);
 
         await _resendClient.SendEmailAsync(new EmailMessage
         {
@@ -44,24 +41,21 @@ public sealed class OrcamentoEmailSender : IOrcamentoEmailSender
         }, cancellationToken);
     }
 
-    private static string CriarAssunto(OrdemServico ordemServico)
+    private static string CriarAssunto(Orcamento orcamento)
     {
-        var data = ordemServico.Orcamento!.DataGeracao.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
-        var prefixo = ordemServico.Id.ToString()[..8].ToUpperInvariant();
-        return $"Orçamento {prefixo} ({ordemServico.Id}) - data: {data}";
+        var data = orcamento.DataGeracao.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
+        var prefixo = orcamento.OrdemServicoId.ToString()[..8].ToUpperInvariant();
+        return $"Orçamento {prefixo} ({orcamento.OrdemServicoId}) - data: {data}";
     }
 
-    private static string CriarHtml(OrdemServico ordemServico)
+    private static string CriarHtml(Orcamento orcamento)
     {
-        var orcamento = ordemServico.Orcamento!;
         var cultura = new CultureInfo("pt-BR");
         var builder = new StringBuilder();
 
         builder.Append("<h1>Orçamento da Ordem de Serviço</h1>");
-        builder.Append($"<p><strong>Ordem de Serviço:</strong> {ordemServico.Id}</p>");
-        builder.Append($"<p><strong>Cliente:</strong> {ordemServico.ClienteId}</p>");
-        builder.Append($"<p><strong>Veículo:</strong> {ordemServico.VeiculoId}</p>");
-        builder.Append($"<p><strong>Status:</strong> {ordemServico.Status.ObterDescricao()}</p>");
+        builder.Append($"<p><strong>Ordem de Serviço:</strong> {orcamento.OrdemServicoId}</p>");
+        builder.Append($"<p><strong>Status do orçamento:</strong> {orcamento.Status.ObterDescricao()}</p>");
         builder.Append($"<p><strong>Data de geração:</strong> {orcamento.DataGeracao.ToLocalTime():dd/MM/yyyy HH:mm}</p>");
         builder.Append($"<p><strong>Valor total:</strong> {orcamento.ValorTotal.ToString("C", cultura)}</p>");
 

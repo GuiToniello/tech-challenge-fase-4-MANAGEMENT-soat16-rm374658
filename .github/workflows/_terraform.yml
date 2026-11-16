@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       working-directory:
-        description: "Pasta do Terraform: kubernetes/infra/foundation, kubernetes/infra/addons (também gerencia o Datadog) ou DB/infra"
+        description: "Pasta do Terraform: kubernetes/infra/foundation, kubernetes/infra/addons (também gerencia o Datadog), DB/infra ou SQS/infra"
         required: true
         type: string
       command:
@@ -83,7 +83,7 @@ jobs:
         run: terraform validate
 
       # Plan especulativo (PR): não grava state, então roda sem lock.
-      # As três pastas recebem os mesmos TF_VAR_*: o Terraform ignora os de variáveis que a pasta não declara
+      # Todas as pastas recebem os mesmos TF_VAR_*: o Terraform ignora os de variáveis que a pasta não declara
       # (rds_password só existe em DB/infra; datadog_* só em kubernetes/infra/addons).
       - name: Terraform Plan
         if: inputs.command == 'plan'

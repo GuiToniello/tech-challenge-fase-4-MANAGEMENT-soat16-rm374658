@@ -4,6 +4,8 @@ Infraestrutura do banco de dados do projeto **Tech Challenge Oficina** (SOAT16, 
 
 A pasta tem o próprio Terraform state e não lê o state de outra pasta. Para rodar, porém, depende do cluster EKS e da rede criados em [kubernetes/infra/foundation](../kubernetes/infra/README.md) (seção 3). O schema (tabelas) é criado pela aplicação ([server/](../server)), quando a Management API sobe.
 
+Este é o banco da Management. Desde a fase 4, o OS Service tem o próprio RDS (`techchallenge-oficina-os-postgres`, banco `oficina_os`), criado pelo [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) na mesma rede e no mesmo padrão desta pasta. Um serviço não acessa o banco do outro ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)).
+
 > Na fase 3, esta pasta era um repositório separado (`tech-challenge-fase-3-DB-soat16-rm374658`).
 
 ## 1. O que é provisionado
@@ -39,7 +41,9 @@ flowchart TD
 
 ## 2. Escolha do banco
 
-A aplicação precisa de persistência relacional: clientes, veículos, serviços, insumos, ordens de serviço e orçamentos, ligados por chaves estrangeiras e com índices únicos (por exemplo, a identificação CPF/CNPJ do cliente). O banco escolhido é o PostgreSQL, acessado com Entity Framework Core e Npgsql. O **RDS** assume a operação do banco (provisionamento, patches, armazenamento criptografado) e o mantém isolado em subnets privadas.
+A aplicação precisa de persistência relacional: clientes, veículos, serviços, insumos, orçamentos e a referência de cada ordem de serviço, ligados por chaves estrangeiras e com índices únicos (por exemplo, a identificação CPF/CNPJ do cliente). O banco escolhido é o PostgreSQL, acessado com Entity Framework Core e Npgsql. O **RDS** assume a operação do banco (provisionamento, patches, armazenamento criptografado) e o mantém isolado em subnets privadas.
+
+Na fase 4, a migration `ExtrairOrdemServico` tirou deste banco as tabelas de OS, histórico de status e indicadores, que agora ficam no banco do OS Service, e criou `ordens_servico_referencias`, `orcamentos` e `orcamentos_servicos`. Ela apaga as tabelas antigas sem levar os dados. As tabelas e os relacionamentos atuais estão na ADR-017.
 
 A decisão está documentada em [docs/](../docs):
 - [ADR-017: PostgreSQL no Amazon RDS e Modelo de Dados](../docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md): justificativa formal, diagrama ER e explicação de cada relacionamento.
@@ -55,17 +59,18 @@ Os detalhes do acesso a dados e das migrations estão na [ADR-007](../docs/adr/A
 
 | Operação | Ordem |
 |---|---|
-| Subir | **Bootstrap** deste monorepo: testes → foundation (rede, EKS e API Gateway) → addons → **DB** → imagem no ECR → K8s Apply (manifests + Secret da API com o endpoint do RDS). Depois, o **Deploy** do repo LAMBDA |
-| Destruir | **Destroy** do repo LAMBDA → **Destroy** deste monorepo: **DB** → addons → foundation |
+| Subir | **Bootstrap** deste monorepo: testes → foundation (rede, EKS e API Gateway) → addons → **DB** → imagem no ECR → K8s Apply (manifests + Secret da API com o endpoint do RDS); o SQS em paralelo. Depois, o **Bootstrap** do repo OS-SERVICE e o **Deploy** do repo LAMBDA |
+| Destruir | **Destroy** do repo LAMBDA e **Destroy** do repo OS-SERVICE → **Destroy** deste monorepo: **DB** → addons → foundation (o SQS em paralelo com o DB) |
 
 - O DB roda depois do cluster porque usa a VPC, as subnets privadas e o SG dos nodes criados pela foundation. No Destroy, ele sai antes: a regra do RDS referencia o SG dos nodes, e as subnets privadas têm as ENIs do RDS. Se o destroy do DB falhar, o da foundation não roda.
-- O LAMBDA é o único consumidor fora do monorepo. Antes de destruir, o Destroy deste monorepo confere se o SG da Lambda (`techchallenge-oficina-lambda-sg`) já foi removido e falha se ele ainda existir.
+- O LAMBDA é o único consumidor deste banco fora do monorepo. Antes de destruir, o Destroy deste monorepo confere se o SG da Lambda (`techchallenge-oficina-lambda-sg`) já foi removido e falha se ele ainda existir.
+- O RDS do OS Service fica nas mesmas subnets privadas e tem um SG que referencia o SG dos nodes. Por isso, o Destroy deste monorepo também confere (`os-service-check`) se o RDS `techchallenge-oficina-os-postgres` e o SG `techchallenge-oficina-os-rds-sg` já foram removidos, e falha se algum ainda existir.
 - **SG do RDS recriado**, com outro ID. Acontece em Destroy + Bootstrap, ou quando muda o `name`, a `description` ou a VPC do SG. Rode de novo o Deploy do repo **LAMBDA**: a regra de acesso dele sumiu junto com o SG antigo.
 - **Instância do RDS recriada**. Acontece em Destroy + Bootstrap, ou numa mudança que force replace da instância. O banco volta vazio. O Bootstrap e o Deploy de uma mudança em `DB/infra/**` já terminam com o K8s Apply com restart: o Secret recebe o endpoint do RDS e a API aplica as migrations ao subir. Fora desses casos, rode o workflow **K8s Apply** (`restart-pods = true`).
 
 ### Contrato consumido (criado por `kubernetes/infra/foundation`)
 
-O DB encontra o cluster e a rede via data sources ([infra/data.tf](infra/data.tf)), sem ler o state da foundation:
+O DB encontra o cluster e a rede via data sources ([infra/data.tf](infra/data.tf)), sem ler o state da foundation. O `DB/infra` do repo OS-SERVICE faz a mesma busca:
 
 | O que | Como é encontrado |
 |---|---|
@@ -163,7 +168,7 @@ Para validar sem acessar a AWS: `terraform init -backend=false` e `terraform val
 
 ## 8. Destruição e custos
 
-O RDS gera custo enquanto existe. Para remover, rode o workflow **Destroy** do monorepo com `confirm = destroy` e aprove no environment. Ele destrói o ambiente inteiro (DB, addons e foundation): não há um destroy só do banco. Antes, rode o Destroy do repo LAMBDA (seção 3). O bucket S3 do state não é removido.
+O RDS gera custo enquanto existe. Para remover, rode o workflow **Destroy** do monorepo com `confirm = destroy` e aprove no environment. Ele destrói o ambiente inteiro (SQS, DB, addons e foundation): não há um destroy só do banco. Antes, rode o Destroy do repo LAMBDA e o do repo OS-SERVICE, que remove o RDS do OS Service (seção 3). O bucket S3 do state não é removido.
 
 ## 9. Troubleshooting
 

@@ -1,4 +1,7 @@
 @startuml
+' Modelo de dominio da Management API (fase 4).
+' A ordem de servico em si vive no OS Service (outro repositorio, banco proprio). Aqui fica so a
+' referencia minima dela (OrdemServicoReferencia), alimentada por eventos do SQS (ADR-019 e ADR-020).
 
 class Cliente {
 	+Id : Guid
@@ -34,14 +37,19 @@ class ItemServico {
 	+Quantidade : int
 }
 
-class OrdemServico {
+class OrdemServicoReferencia {
 	+Id : Guid
+	+ClienteId : Guid
+	+VeiculoId : Guid
+	+ServicoIds : Guid[]
 	+Status : StatusOrdemServico
 }
 
 class Orcamento {
+	+Id : Guid
 	+DataGeracao : DateTime
 	+ValorTotal : decimal
+	+Status : StatusOrcamento
 }
 
 class OrcamentoServico {
@@ -50,23 +58,16 @@ class OrcamentoServico {
 	+ValorTotal : decimal
 }
 
-class Indicador {
-	+TempoMedioExecucao : TimeSpan
-	+TempoMedioEntrega : TimeSpan
-}
-
 Cliente "1" --> "0..*" Veiculo
-Cliente "1" --> "0..*" OrdemServico
-Veiculo "1" --> "0..*" OrdemServico
-
-OrdemServico "1" *-- "1..*" Servico
 Servico "1" *-- "0..*" ItemServico
 ItemServico "*" --> "1" Insumo
 
-OrdemServico "1" *-- "0..1" Orcamento
-Orcamento "1" *-- "1..*" OrcamentoServico
-OrcamentoServico "*" --> "1" Servico : referencia
+OrdemServicoReferencia ..> Cliente : clienteId (validado)
+OrdemServicoReferencia ..> Veiculo : veiculoId (validado)
+OrdemServicoReferencia ..> Servico : servicoIds (validados)
 
-Indicador ..> OrdemServico : calcula tempos
+Orcamento "1" -- "1" OrdemServicoReferencia : Id = ordemServicoId
+Orcamento "1" *-- "1..*" OrcamentoServico
+OrcamentoServico "*" ..> "1" Servico : snapshot
 
 @enduml

@@ -12,3 +12,6 @@ data:
   AllowedHosts: "*"
   Serilog__MinimumLevel__Default: "Information"
   Serilog__MinimumLevel__Override__Microsoft.AspNetCore: "Warning"
+  SqsSettings__FilaConsumo: "techchallenge-oficina-management.fifo"
+  SqsSettings__FilaPublicacao: "techchallenge-oficina-os-service.fifo"
+  AWS_REGION: "us-east-1"

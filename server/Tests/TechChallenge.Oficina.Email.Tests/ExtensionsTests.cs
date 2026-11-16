@@ -1,10 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
-using TechChallenge.Oficina.Entities.Features.Orcamentos;
 using TechChallenge.Oficina.Email;
 using TechChallenge.Oficina.Email.Configuration;
-using Xunit;
-using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 using TechChallenge.Oficina.Email.Features;
+using TechChallenge.Oficina.UseCases.Features.Orcamentos.UseCases;
+using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
+using Xunit;
 
 namespace TechChallenge.Oficina.DB.Email.Tests;
 
@@ -21,6 +21,7 @@ public sealed class ExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         Assert.NotNull(provider.GetService<IOrcamentoEmailSender>());
+        Assert.NotNull(provider.GetService<IOrdemServicoStatusEmailSender>());
         Assert.NotNull(provider.GetService<IResendClient>());
     }
 
@@ -35,6 +36,7 @@ public sealed class ExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         Assert.NotNull(provider.GetService<IOrcamentoEmailSender>());
+        Assert.NotNull(provider.GetService<IOrdemServicoStatusEmailSender>());
         Assert.NotNull(provider.GetService<IResendClient>());
     }
 }

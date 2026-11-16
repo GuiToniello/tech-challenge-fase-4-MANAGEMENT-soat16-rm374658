@@ -6,8 +6,9 @@
 Com a adoção de Clean Architecture no projeto, a abstração de acesso a dados deixou de ser tratada como "Repository" no núcleo e passou a seguir o conceito de **porta de saída (Gateway)** dos casos de uso.
 
 Na implementação atual:
-- os contratos de persistência ficam no projeto **Application (UseCases)** (`TechChallenge.Oficina.UseCases.csproj`), como `IClienteGateway`, `IOrdemServicoGateway`, `IServicoGateway`, `IInsumoGateway`, `IVeiculoGateway` e `IIndicadorGateway`;
-- as implementações concretas ficam no projeto **DB** (`TechChallenge.Oficina.DB.csproj`), como `ClienteGateway`, `OrdemServicoGateway`, `ServicoGateway`, etc;
+- os contratos de persistência ficam no projeto **Application (UseCases)** (`TechChallenge.Oficina.UseCases.csproj`), como `IClienteGateway`, `IVeiculoGateway`, `IServicoGateway`, `IInsumoGateway`, `IOrcamentoGateway` e `IOrdemServicoReferenciaGateway`;
+- as implementações concretas ficam no projeto **DB** (`TechChallenge.Oficina.DB.csproj`), como `ClienteGateway`, `OrcamentoGateway`, `ServicoGateway`, etc;
+- o OS Service ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)) segue o mesmo padrão no repositório dele (`IOrdemServicoGateway`, `IIndicadorGateway`);
 - o vínculo contrato/implementação é feito por DI no módulo `AddInfraData`.
 
 **Decisão**:

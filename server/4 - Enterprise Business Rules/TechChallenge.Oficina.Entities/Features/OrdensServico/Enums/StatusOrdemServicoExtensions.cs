@@ -13,6 +13,7 @@ public static class StatusOrdemServicoExtensions
             StatusOrdemServico.Finalizada => "Finalizada",
             StatusOrdemServico.Entregue => "Entregue",
             StatusOrdemServico.Encerrada => "Encerrada",
+            StatusOrdemServico.Cancelada => "Cancelada",
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Status da ordem de servico invalido.")
         };
     }

@@ -12,8 +12,8 @@ datadog:
     containerCollectAll: true
   containerExcludeLogs: "kube_namespace:kube-system kube_namespace:datadog"
 
-  # Single Step Instrumentation: o tracer .NET v3 e injetado so nos pods do namespace oficina,
-  # sem label nos pods e sem mudanca no Dockerfile.
+  # Single Step Instrumentation: o tracer .NET v3 e injetado so nos pods dos namespaces oficina
+  # (Management API) e os-service (OS Service), sem label nos pods e sem mudanca no Dockerfile.
   apm:
     instrumentation:
       enabled: true
@@ -22,6 +22,7 @@ datadog:
           namespaceSelector:
             matchNames:
               - oficina
+              - os-service
           ddTraceVersions:
             dotnet: "3"
           ddTraceConfigs:
@@ -80,4 +81,10 @@ clusterAgent:
           timeout: 5
           tags:
             - service:management-api
+            - env:${env}
+        - name: os-service-api
+          url: http://os-service-api.os-service.svc.cluster.local/health/ready
+          timeout: 5
+          tags:
+            - service:os-service-api
             - env:${env}

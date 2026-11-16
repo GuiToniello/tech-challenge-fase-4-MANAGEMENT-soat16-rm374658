@@ -1,6 +1,6 @@
 # ADR-018: Monorepo e API Única (Management)
 
-**Status**: Aceita (fase 4)
+**Status**: Aceita (fase 4). Atualizada: ainda na fase 4, o ciclo de vida da OS foi extraído para um segundo serviço, o OS Service, com repositório e banco próprios ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)). A "API única" vale para este monorepo, que continua com uma só API, a Management API; o sistema passou a ter duas.
 
 **Contexto**:
 Na fase 3 o sistema ficou dividido em quatro repositórios, cada um com as próprias pipelines e state do Terraform:
@@ -23,10 +23,11 @@ As quatro APIs dedicadas não tinham código próprio nas camadas compartilhadas
      - o cluster e a borda vão para `kubernetes/`.
    - O histórico de commits não foi migrado.
    - A LAMBDA continua em repositório próprio ([tech-challenge-fase-4-LAMBDA-soat16-rm374658](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658)).
-2. **Uma API só:**
+2. **Uma API só neste monorepo:**
    - A `TechChallenge.Oficina.Monolith.API` foi renomeada para `TechChallenge.Oficina.Management.API`.
    - As APIs dedicadas, os testes, as collections, as imagens, os manifests e as rotas delas foram removidos.
    - No cluster, no ECR, no Datadog e no API Gateway, o nome passa a ser `management-api`, a imagem `techchallenge-oficina-management` e o prefixo `/management`.
+   - Depois, as rotas de OS e os indicadores saíram da Management API para o OS Service (ADR-019), que conversa com ela por eventos no SQS ([ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)). A rota `/completa` deixou de existir.
 3. **Pipelines unificados** em `.github/workflows/`:
    - **Bootstrap:** sobe tudo na ordem (testes → foundation → addons → RDS → imagem → manifests).
    - **Deploy:**
@@ -38,12 +39,12 @@ As quatro APIs dedicadas não tinham código próprio nas camadas compartilhadas
 
 **Consequências**:
 - ✅ Uma mudança que atravessa aplicação, banco e cluster sai em um único PR e um único pipeline, na ordem certa.
-- ✅ Menos peças: uma imagem, um Deployment, um HPA, uma rota no gateway, um target group, um synthetic. Também há menos secrets duplicados.
+- ✅ Menos peças neste monorepo: uma imagem, um Deployment, um HPA, uma rota no gateway, um target group, um synthetic. Também há menos secrets duplicados. O OS Service soma os dele, no próprio repositório.
 - ✅ Os docs ficam juntos: ADRs e RFCs em [docs/](../), e um README por pasta.
 - ⚠ Um push em `kubernetes/infra/**` com o ambiente desligado recria o cluster (custo), como já acontecia na fase 3.
-- ⚠ A LAMBDA continua acoplada por nomes fixos: o prefixo `/management` na rota liberada sem `cpf` (`POST /management/api/clientes`), o SG do RDS e os nomes das funções. A ordem entre os dois repositórios continua manual:
-  - para subir: Bootstrap deste repo → Deploy da LAMBDA;
-  - para derrubar: Destroy da LAMBDA → Destroy deste repo.
+- ⚠ A LAMBDA continua acoplada por nomes fixos: o prefixo `/management` na rota liberada sem `cpf` (`POST /management/api/clientes`), o SG do RDS e os nomes das funções. Com o OS Service, a ordem entre os repositórios continua manual:
+  - para subir: Bootstrap deste repo → Bootstrap do OS-SERVICE → Deploy da LAMBDA;
+  - para derrubar: Destroy da LAMBDA e do OS-SERVICE → Destroy deste repo.
 - ⚠ O state da fase 3 fica no bucket com as chaves antigas, só como histórico.
 
-**Relacionados**: [ADR-001](ADR-001-Clean-Architecture.md), [ADR-015](ADR-015-Comunicacao-Sincrona-via-API-Gateway.md), [ADR-016](ADR-016-Escalabilidade-com-HPA.md), [ADR-017](ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md).
+**Relacionados**: [ADR-001](ADR-001-Clean-Architecture.md), [ADR-015](ADR-015-Comunicacao-Sincrona-via-API-Gateway.md), [ADR-016](ADR-016-Escalabilidade-com-HPA.md), [ADR-017](ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md), [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) (repo OS-SERVICE), [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).

@@ -104,6 +104,22 @@ jobs:
           "DatabaseSettings__ConnectionString=Host=$env:RDS_ENDPOINT;Port=5432;Database=$env:RDS_DATABASE;Username=$env:RDS_USERNAME;Password=$env:RDS_PASSWORD" | Set-Content kubernetes/k8s/.env
           "ResendSettings__ApiKey=$env:RESEND_API_KEY" | Add-Content kubernetes/k8s/.env
 
+      # Chave de acesso do usuário IAM da Management nas filas SQS: criada pelo SQS/infra (Bootstrap ou Deploy)
+      # e guardada no SSM Parameter Store. Mascarada antes de ir para o .env, para nunca aparecer no log
+      - name: Adicionar a chave do SQS ao kubernetes/k8s/.env
+        if: inputs.command == 'apply'
+        run: |
+          for pair in AWS_ACCESS_KEY_ID=access-key-id AWS_SECRET_ACCESS_KEY=secret-access-key; do
+            param="/techchallenge-oficina/sqs/management/${pair#*=}"
+            value=$(aws ssm get-parameter --name "$param" --with-decryption --query Parameter.Value --output text 2>/dev/null || true)
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error::Parâmetro $param não encontrado no SSM. Rode o Bootstrap (terraform-sqs) antes."
+              exit 1
+            fi
+            echo "::add-mask::$value"
+            echo "${pair%%=*}=$value" >> kubernetes/k8s/.env
+          done
+
       - name: Apply manifests
         if: inputs.command == 'apply'
         run: kubectl apply -k kubernetes/k8s

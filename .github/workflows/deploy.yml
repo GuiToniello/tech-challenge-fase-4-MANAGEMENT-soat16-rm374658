@@ -48,6 +48,14 @@ jobs:
       command: validate
     secrets: inherit
 
+  validate-sqs:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: SQS/infra
+      command: validate
+    secrets: inherit
+
   validate-k8s:
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/_k8s-apply.yml
@@ -83,9 +91,19 @@ jobs:
       command: plan
     secrets: inherit
 
+  plan-sqs:
+    needs: validate-sqs
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: SQS/infra
+      command: plan
+    secrets: inherit
+
   # ---------- Push na main ----------
 
-  # Aplica só as partes que mudaram, sempre na ordem: foundation → addons → DB → imagem → manifests
+  # Aplica só as partes que mudaram, sempre na ordem: foundation → addons → DB → imagem → manifests.
+  # O SQS (filas, usuários IAM e chaves no SSM) não depende da VPC nem do EKS: roda em paralelo, antes dos manifests
   changes:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -93,6 +111,7 @@ jobs:
       app: ${{ steps.filter.outputs.app }}
       infra: ${{ steps.filter.outputs.infra }}
       db: ${{ steps.filter.outputs.db }}
+      sqs: ${{ steps.filter.outputs.sqs }}
       k8s: ${{ steps.filter.outputs.k8s }}
     steps:
       - uses: actions/checkout@v7
@@ -110,6 +129,9 @@ jobs:
               - '.github/workflows/_terraform.yml'
             db:
               - 'DB/infra/**'
+              - '.github/workflows/_terraform.yml'
+            sqs:
+              - 'SQS/infra/**'
               - '.github/workflows/_terraform.yml'
             k8s:
               - 'kubernetes/k8s/**'
@@ -143,6 +165,16 @@ jobs:
       command: apply
     secrets: inherit
 
+  # Filas e chaves que o apply-k8s grava no Secret (lidas do SSM)
+  apply-sqs:
+    needs: changes
+    if: needs.changes.outputs.sqs == 'true'
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: SQS/infra
+      command: apply
+    secrets: inherit
+
   build-push:
     needs: [changes, build-test, apply-db]
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.app == 'true' }}
@@ -152,10 +184,10 @@ jobs:
     secrets: inherit
 
   # Sempre com restart: a imagem usa a tag fixa latest, e ConfigMaps/Secret não têm hash no nome.
-  # Roda também quando a infra ou o RDS mudam (cluster recriado ou endpoint novo do RDS no Secret)
+  # Roda também quando a infra, o RDS ou o SQS mudam (cluster recriado, endpoint novo do RDS ou chave nova do SQS no Secret)
   apply-k8s:
-    needs: [changes, build-push]
-    if: ${{ !failure() && !cancelled() && (needs.changes.outputs.k8s == 'true' || needs.changes.outputs.app == 'true' || needs.changes.outputs.db == 'true' || needs.changes.outputs.infra == 'true') }}
+    needs: [changes, build-push, apply-sqs]
+    if: ${{ !failure() && !cancelled() && (needs.changes.outputs.k8s == 'true' || needs.changes.outputs.app == 'true' || needs.changes.outputs.db == 'true' || needs.changes.outputs.infra == 'true' || needs.changes.outputs.sqs == 'true') }}
     uses: ./.github/workflows/_k8s-apply.yml
     with:
       command: apply

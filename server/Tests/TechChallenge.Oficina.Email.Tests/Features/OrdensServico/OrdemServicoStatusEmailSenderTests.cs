@@ -1,11 +1,9 @@
 using Moq;
 using Resend;
-using TechChallenge.Oficina.Entities.Features.Insumos;
-using TechChallenge.Oficina.Entities.Features.OrdensServico;
 using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
-using TechChallenge.Oficina.Entities.Features.Servicos;
 using TechChallenge.Oficina.Email.Configuration;
 using TechChallenge.Oficina.Email.Features.OrdensServico;
+using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 using Xunit;
 using TechChallenge.Oficina.Email.Features;
 
@@ -22,159 +20,98 @@ public sealed class OrdemServicoStatusEmailSenderTests
     [InlineData(StatusOrdemServico.Entregue)]
     public async Task EnviarStatusAlteradoAsync_DeveEnviarEmailComAssuntoCustomizadoParaStatus(StatusOrdemServico status)
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-        EmailMessage? emailCapturado = null;
+        var notificacao = CriarNotificacao(status);
+        var sender = CriarSender();
+        var emailCapturado = CapturarEmail();
 
-        _resendClientMock
-            .Setup(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
-            .Callback<EmailMessage, CancellationToken>((message, _) => emailCapturado = message)
-            .Returns(Task.CompletedTask);
-
-        await sender.EnviarStatusAlteradoAsync(ordemServico, "cliente@teste.com", status);
+        await sender.EnviarStatusAlteradoAsync(notificacao, "cliente@teste.com");
 
         _resendClientMock.Verify(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()), Times.Once);
-        Assert.NotNull(emailCapturado);
-        Assert.Contains("onboarding@resend.dev", emailCapturado!.From.ToString());
-        Assert.NotNull(emailCapturado.To);
-        Assert.Contains("cliente@teste.com", emailCapturado.To);
-        Assert.Contains(ordemServico.Id.ToString()[..8].ToUpperInvariant(), emailCapturado.Subject);
-        Assert.Contains("Status", emailCapturado.Subject);
-        Assert.Contains(ordemServico.Id.ToString(), emailCapturado.HtmlBody);
+        var email = emailCapturado();
+        Assert.Contains("onboarding@resend.dev", email.From.ToString());
+        Assert.Contains("cliente@teste.com", email.To);
+        Assert.Contains(notificacao.OrdemServicoId.ToString()[..8].ToUpperInvariant(), email.Subject);
+        Assert.Contains("Status", email.Subject);
+        Assert.Contains(notificacao.OrdemServicoId.ToString(), email.HtmlBody);
     }
 
     [Fact]
     public async Task EnviarStatusAlteradoAsync_DeveRetornarSemErroQuandoApiKeyNaoConfigurada()
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = string.Empty, FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-
-        var action = async () => await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.EmDiagnostico);
+        var sender = CriarSender(new ResendSettings { ApiKey = string.Empty, FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true });
 
         // Não deve lançar exceção em modo degradado
-        await action();
+        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(StatusOrdemServico.EmDiagnostico), "cliente@teste.com");
 
-        _resendClientMock.Verify(
-            client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        _resendClientMock.Verify(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task EnviarStatusAlteradoAsync_DeveRetornarSemErroQuandoFromEmailNaoConfigurado()
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = string.Empty, SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-
-        var action = async () => await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.EmExecucao);
+        var sender = CriarSender(new ResendSettings { ApiKey = "api-key", FromEmail = string.Empty, SendEmailOnStatusChange = true });
 
         // Não deve lançar exceção em modo degradado
-        await action();
+        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(StatusOrdemServico.EmExecucao), "cliente@teste.com");
 
-        _resendClientMock.Verify(
-            client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        _resendClientMock.Verify(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task EnviarStatusAlteradoAsync_DeveRetornarSemErroQuandoSendEmailOnStatusChangeEstaDesabilitado()
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = false };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-
-        var action = async () => await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.EmDiagnostico);
+        var sender = CriarSender(new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = false });
 
         // Não deve lançar exceção mesmo com flag desabilitada
-        await action();
+        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(StatusOrdemServico.EmDiagnostico), "cliente@teste.com");
 
-        _resendClientMock.Verify(
-            client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Fact]
-    public async Task EnviarStatusAlteradoAsync_DeveContarAssinaturaPrefixoCorretamenteNoAssunto()
-    {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-        EmailMessage? emailCapturado = null;
-
-        _resendClientMock
-            .Setup(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
-            .Callback<EmailMessage, CancellationToken>((message, _) => emailCapturado = message)
-            .Returns(Task.CompletedTask);
-
-        await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.EmDiagnostico);
-
-        Assert.NotNull(emailCapturado);
-        var prefixoEsperado = ordemServico.Id.ToString()[..8].ToUpperInvariant();
-        Assert.Contains(prefixoEsperado, emailCapturado!.Subject);
+        _resendClientMock.Verify(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task EnviarStatusAlteradoAsync_DeveConterDadosOrdemServicoNoHTML()
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-        EmailMessage? emailCapturado = null;
+        var notificacao = CriarNotificacao(StatusOrdemServico.Finalizada);
+        var sender = CriarSender();
+        var emailCapturado = CapturarEmail();
 
-        _resendClientMock
-            .Setup(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
-            .Callback<EmailMessage, CancellationToken>((message, _) => emailCapturado = message)
-            .Returns(Task.CompletedTask);
+        await sender.EnviarStatusAlteradoAsync(notificacao, "cliente@teste.com");
 
-        await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.Finalizada);
-
-        Assert.NotNull(emailCapturado);
-        Assert.Contains(ordemServico.Id.ToString(), emailCapturado!.HtmlBody);
-        Assert.Contains(ordemServico.ClienteId.ToString(), emailCapturado.HtmlBody);
-        Assert.Contains(ordemServico.VeiculoId.ToString(), emailCapturado.HtmlBody);
-        Assert.Contains("finalizada", emailCapturado.HtmlBody, System.StringComparison.OrdinalIgnoreCase);
+        var email = emailCapturado();
+        Assert.Contains(notificacao.OrdemServicoId.ToString(), email.HtmlBody);
+        Assert.Contains(notificacao.ClienteId.ToString(), email.HtmlBody);
+        Assert.Contains(notificacao.VeiculoId.ToString(), email.HtmlBody);
+        Assert.Contains("finalizada", email.HtmlBody, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task EnviarStatusAlteradoAsync_DeveConterServicosDaOSNoHTML()
+    public async Task EnviarStatusAlteradoAsync_DeveConterServicosEValorDoOrcamentoNoHTML()
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
-        EmailMessage? emailCapturado = null;
+        var notificacao = CriarNotificacao(StatusOrdemServico.EmExecucao, valorOrcamento: 150m);
+        var sender = CriarSender();
+        var emailCapturado = CapturarEmail();
 
-        _resendClientMock
-            .Setup(client => client.SendEmailAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
-            .Callback<EmailMessage, CancellationToken>((message, _) => emailCapturado = message)
-            .Returns(Task.CompletedTask);
+        await sender.EnviarStatusAlteradoAsync(notificacao, "cliente@teste.com");
 
-        await sender.EnviarStatusAlteradoAsync(
-            ordemServico,
-            "cliente@teste.com",
-            StatusOrdemServico.EmExecucao);
-
-        Assert.NotNull(emailCapturado);
-        foreach (var servico in ordemServico.Servicos)
+        var email = emailCapturado();
+        foreach (var servico in notificacao.Servicos)
         {
-            Assert.Contains(servico.Nome, emailCapturado!.HtmlBody);
+            Assert.Contains(servico, email.HtmlBody);
         }
+
+        Assert.Contains("Informações do Orçamento", email.HtmlBody);
+        Assert.Contains("150,00", email.HtmlBody);
+    }
+
+    [Fact]
+    public async Task EnviarStatusAlteradoAsync_NaoDeveConterOrcamento_QuandoNaoHouverValor()
+    {
+        var sender = CriarSender();
+        var emailCapturado = CapturarEmail();
+
+        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(StatusOrdemServico.EmDiagnostico), "cliente@teste.com");
+
+        Assert.DoesNotContain("Informações do Orçamento", emailCapturado().HtmlBody);
     }
 
     [Theory]
@@ -182,11 +119,26 @@ public sealed class OrdemServicoStatusEmailSenderTests
     [InlineData(StatusOrdemServico.EmExecucao, "execução")]
     [InlineData(StatusOrdemServico.Finalizada, "finalizada")]
     [InlineData(StatusOrdemServico.Entregue, "entregue")]
+    [InlineData(StatusOrdemServico.Cancelada, "cancelada")]
     public async Task EnviarStatusAlteradoAsync_DeveConterDetalhesEspecificosPorStatus(StatusOrdemServico status, string textoEsperado)
     {
-        var ordemServico = CriarOrdemServico();
-        var settings = new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true };
-        var sender = new OrdemServicoStatusEmailSender(_resendClientMock.Object, settings);
+        var sender = CriarSender();
+        var emailCapturado = CapturarEmail();
+
+        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(status), "cliente@teste.com");
+
+        Assert.Contains(textoEsperado, emailCapturado().HtmlBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private OrdemServicoStatusEmailSender CriarSender(ResendSettings? settings = null)
+    {
+        return new OrdemServicoStatusEmailSender(
+            _resendClientMock.Object,
+            settings ?? new ResendSettings { ApiKey = "api-key", FromEmail = "onboarding@resend.dev", SendEmailOnStatusChange = true });
+    }
+
+    private Func<EmailMessage> CapturarEmail()
+    {
         EmailMessage? emailCapturado = null;
 
         _resendClientMock
@@ -194,20 +146,19 @@ public sealed class OrdemServicoStatusEmailSenderTests
             .Callback<EmailMessage, CancellationToken>((message, _) => emailCapturado = message)
             .Returns(Task.CompletedTask);
 
-        await sender.EnviarStatusAlteradoAsync(ordemServico, "cliente@teste.com", status);
-
-        Assert.NotNull(emailCapturado);
-        Assert.Contains(textoEsperado, emailCapturado!.HtmlBody, System.StringComparison.OrdinalIgnoreCase);
+        return () => emailCapturado ?? throw new InvalidOperationException("Nenhum email foi enviado.");
     }
 
-    private static OrdemServico CriarOrdemServico()
+    private static NotificacaoStatusOrdemServico CriarNotificacao(StatusOrdemServico status, decimal? valorOrcamento = null)
     {
-        var servico = CriarServico("Revisao", 1, 50m);
-        return OrdemServico.Criar(Guid.NewGuid(), Guid.NewGuid(), [servico]);
-    }
-
-    private static Servico CriarServico(string nome, int ordem, decimal valor)
-    {
-        return Servico.Criar(nome, "Descricao do servico", null);
+        return new NotificacaoStatusOrdemServico
+        {
+            OrdemServicoId = Guid.NewGuid(),
+            ClienteId = Guid.NewGuid(),
+            VeiculoId = Guid.NewGuid(),
+            StatusNovo = status,
+            ValorOrcamento = valorOrcamento,
+            Servicos = ["Revisao", "Alinhamento"]
+        };
     }
 }

@@ -1,7 +1,9 @@
 name: Bootstrap
 # Sobe o ambiente inteiro, na ordem: testes → VPC/EKS/API Gateway → addons → RDS → imagem no ECR → manifests.
+# As filas SQS (com usuários IAM e chaves no SSM) sobem em paralelo, logo depois dos testes, e antes dos manifests.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
-# Depois dele, rode o Deploy do repo LAMBDA (as Lambdas usam a VPC e o RDS criados aqui).
+# Depois dele, rode o Deploy do repo LAMBDA (as Lambdas usam a VPC e o RDS criados aqui) e o Bootstrap
+# do repo OS-SERVICE (usa a VPC, o EKS, a rota /os do API Gateway e as filas SQS criados aqui).
 
 on:
   workflow_dispatch:
@@ -19,6 +21,15 @@ jobs:
     uses: ./.github/workflows/_terraform.yml
     with:
       working-directory: kubernetes/infra/foundation
+      command: apply
+    secrets: inherit
+
+  # Não depende da VPC nem do EKS. O k8s-apply lê a chave da Management no SSM
+  terraform-sqs:
+    needs: build-test
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: SQS/infra
       command: apply
     secrets: inherit
 
@@ -46,7 +57,7 @@ jobs:
     secrets: inherit
 
   k8s-apply:
-    needs: build-push
+    needs: [build-push, terraform-sqs]
     uses: ./.github/workflows/_k8s-apply.yml
     with:
       command: apply

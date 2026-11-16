@@ -3,6 +3,7 @@
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Management.API/TechChallenge.Oficina.Management.API.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.DB/TechChallenge.Oficina.DB.csproj" Id="71fe5663-eba3-4094-a2e6-eafa02c7eae3" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Email/TechChallenge.Oficina.Email.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Messaging/TechChallenge.Oficina.Messaging.csproj" />
   </Folder>
   <Folder Name="/2 - Interface Adapters/">
     <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Adapters/TechChallenge.Oficina.Adapters.csproj" />
@@ -32,7 +33,9 @@
     <File Path="../docs/adr/ADR-016-Escalabilidade-com-HPA.md" />
     <File Path="../docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md" />
     <File Path="../docs/adr/ADR-018-Monorepo-e-API-Unica-Management.md" />
+    <File Path="../docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md" />
     <File Path="../docs/adr/INDICE.md" />
+    <File Path="../docs/rfc/RFC-004-Comunicacao-entre-Microsservicos.md" />
   </Folder>
   <Folder Name="/E2E/">
     <File Path="../e2e/TechChallenge.Oficina.Management.API.postman_collection.json" />
@@ -47,5 +50,6 @@
     <Project Path="Tests/TechChallenge.Oficina.DB.Tests/TechChallenge.Oficina.DB.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Email.Tests/TechChallenge.Oficina.Email.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Integration.Tests/TechChallenge.Oficina.Integration.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Messaging.Tests/TechChallenge.Oficina.Messaging.Tests.csproj" />
   </Folder>
 </Solution>

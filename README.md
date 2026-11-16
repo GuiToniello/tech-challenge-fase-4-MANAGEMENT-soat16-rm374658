@@ -4,7 +4,14 @@
 
 Software de gestão para uma oficina mecânica.
 
-Tech Challenge da Fase 4 do curso SOAT16 da FIAP. Este é o **monorepo do serviço Management**, com três partes: a aplicação (.NET), o banco (Amazon RDS) e o cluster com a borda (Amazon EKS e API Gateway). Na fase 3 essas partes ficavam em três repositórios separados (APP, DB e K8S). Só as Lambdas de autenticação continuam em um repositório próprio, o [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658).
+Tech Challenge da Fase 4 do curso SOAT16 da FIAP. Este é o **monorepo do serviço Management**, com quatro partes: a aplicação (.NET), o banco (Amazon RDS), as filas (Amazon SQS) e o cluster com a borda (Amazon EKS e API Gateway). Na fase 3, a aplicação, o banco e o cluster ficavam em três repositórios separados (APP, DB e K8S).
+
+O sistema tem três repositórios:
+- **MANAGEMENT** (este): cadastros (clientes, veículos, serviços e insumos), estoque, orçamento e e-mails. Também cria a rede, o cluster, o API Gateway, o Datadog e as filas usados pelos outros serviços.
+- [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658): o microsserviço de ordens de serviço (OS), com banco próprio. Na fase 4, o ciclo de vida da OS saiu deste repositório e foi para lá ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)).
+- [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658): as Lambdas de autenticação.
+
+A Management e o OS Service se comunicam só por eventos no Amazon SQS ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro.
 
 Grupo:
 -  Guilherme Toniello Vieira -  SOAT16 - rm374658
@@ -14,9 +21,11 @@ Grupo:
 ```
 /
 ├── server/               Solução .NET: Management API, camadas da Clean Architecture e testes
-├── e2e/                  Collection do Postman da Management API e environment da AWS
-├── docker-compose.yml    Postgres + Management API para rodar localmente
+├── e2e/                  Collection do Postman da Management API (cadastros) e environment da AWS
+├── docker-compose.yml    Postgres + ElasticMQ (SQS local) + Management API para rodar localmente
+├── elasticmq.conf        Filas FIFO do ElasticMQ, as mesmas do SQS na AWS
 ├── DB/                   Terraform do Amazon RDS PostgreSQL
+├── SQS/                  Terraform das filas Amazon SQS FIFO, dos usuários IAM e das chaves no SSM
 ├── kubernetes/           Terraform da VPC, EKS, API Gateway, NLB e addons (Datadog), e os manifests Kubernetes
 ├── docs/                 Arquitetura, observabilidade, ADRs e RFCs
 └── .github/workflows/    Pipelines (build, testes, imagem, Terraform e deploy no cluster)
@@ -27,7 +36,8 @@ Grupo:
 | [server/](./server/) | Código .NET 10 da `TechChallenge.Oficina.Management.API` e testes | Seções 2 a 4 deste README |
 | [e2e/](./e2e/) | Collection do Postman e environment da AWS | Seção 8 |
 | [DB/](./DB/) | Amazon RDS PostgreSQL (state `techchallenge-oficina/fase-4/database.tfstate`) | [DB/README.md](./DB/README.md) |
-| [kubernetes/](./kubernetes/) | `infra/foundation` (VPC, EKS, API Gateway, VPC Link e NLB), `infra/addons` (Metrics Server, Datadog Agent e recursos do Datadog) e `k8s/` (manifests da API, via Kustomize) | [kubernetes/README.md](./kubernetes/README.md) |
+| [SQS/](./SQS/) | Filas FIFO entre a Management e o OS Service, com DLQ, usuários IAM e chaves no SSM Parameter Store (state `techchallenge-oficina/fase-4/sqs.tfstate`) | [SQS/README.md](./SQS/README.md) |
+| [kubernetes/](./kubernetes/) | `infra/foundation` (VPC, EKS, API Gateway, VPC Link e NLB, com as rotas das duas APIs), `infra/addons` (Metrics Server, Datadog Agent e recursos do Datadog) e `k8s/` (manifests da Management API, via Kustomize) | [kubernetes/README.md](./kubernetes/README.md) |
 | [docs/](./docs/) | Visão geral, contrato de observabilidade, ADRs e RFCs | [docs/arquitetura.md](./docs/arquitetura.md) |
 | [.github/workflows/](./.github/workflows/) | Bootstrap, Deploy, Destroy e K8s Apply | [.github/workflows/README.md](./.github/workflows/README.md) |
 
@@ -41,8 +51,8 @@ Grupo:
 ## 2. Arquitetura
 
 A visão geral do sistema está em [docs/arquitetura.md](./docs/arquitetura.md). Lá estão:
-- o diagrama de componentes (nuvem, API, banco e monitoramento);
-- os diagramas de sequência da autenticação e da abertura de OS;
+- o diagrama de componentes (nuvem, APIs, bancos, filas e monitoramento);
+- os diagramas de sequência da autenticação e da saga entre os serviços (abertura da OS e orçamento);
 - o índice das RFCs e ADRs.
 
 O código da API segue a Clean Architecture (ADR-001), com 4 anéis. As dependências apontam sempre para dentro:
@@ -53,6 +63,7 @@ flowchart LR
     API[TechChallenge.Oficina.Management.API\nAPI / Web]
     DB[TechChallenge.Oficina.DB\nEF Core + PostgreSQL]
     Email[TechChallenge.Oficina.Email\nResend]
+    Messaging[TechChallenge.Oficina.Messaging\nAmazon SQS]
   end
   subgraph IA[2 - Interface Adapters]
     Controllers[TechChallenge.Oficina.Controllers]
@@ -70,13 +81,17 @@ flowchart LR
   Adapters --> Controllers
   DB --> UseCases
   Email --> UseCases
+  Messaging --> Controllers
+  Messaging --> UseCases
   Controllers --> UseCases
   UseCases --> Entities
 ```
 
+A mensageria segue o mesmo padrão do e-mail: os casos de uso publicam eventos pela porta `IEventosPublisher`, e o projeto `TechChallenge.Oficina.Messaging` implementa a publicação e o consumidor da fila. O evento consumido entra pelo `EventosController`, como uma requisição HTTP entra por um endpoint ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)).
+
 ### 2.1. Visão Geral
 
-As decisões arquiteturais estão documentadas como ADRs (Architecture Decision Records) em [docs/adr/](./docs/adr/). As RFCs (Request for Comments) são propostas que compararam opções antes de uma decisão e ficam em [docs/rfc/](./docs/rfc/). A numeração é compartilhada com o repositório LAMBDA, que guarda a RFC-003.
+As decisões arquiteturais estão documentadas como ADRs (Architecture Decision Records) em [docs/adr/](./docs/adr/). As RFCs (Request for Comments) são propostas que compararam opções antes de uma decisão e ficam em [docs/rfc/](./docs/rfc/). A numeração é compartilhada com os repositórios OS-SERVICE, que guarda a ADR-019, e LAMBDA, que guarda a RFC-003.
 
 | ADR | Resumo | Link |
 |-----|--------|------|
@@ -89,20 +104,23 @@ As decisões arquiteturais estão documentadas como ADRs (Architecture Decision 
 | ADR-007 — EF Core com PostgreSQL | EF Core 10.x com Npgsql como ORM para PostgreSQL, com migrations versionadas. Configurações de mapeamento via `IEntityTypeConfiguration<T>` e connection string via `appsettings.json`. | [ver](./docs/adr/ADR-007-EFCore-com-PostgreSQL.md) |
 | ADR-008 — Swagger para Documentação | Documentação automática de endpoints via Swashbuckle com suporte a autenticação JWT no UI. Swagger UI disponível na raiz da aplicação. | [ver](./docs/adr/ADR-008-Swagger-para-API.md) |
 | ADR-009 — Migrações Automáticas no Startup | Migrations pendentes são aplicadas automaticamente ao iniciar a API via `ApplyMigrations()`. Elimina intervenção manual no deploy, incluindo ambientes de container. | [ver](./docs/adr/ADR-009-Migracoes-Automaticas-no-Startup.md) |
-| ADR-011 — Envio de E-mail de Orçamento | Notifica o cliente por e-mail ao gerar orçamento via porta de saída `IOrcamentoEmailSender` e provedor Resend. A API funciona normalmente sem a ApiKey; o envio de e-mail é desabilitado. | [ver](./docs/adr/ADR-011-Envio-de-Email-de-Orcamento.md) |
-| ADR-012 — Controle de Estoque de Insumos | Verifica estoque ao gerar orçamento (sem reserva) e debita automaticamente ao aprovar. Lança `DomainException` se houver estoque insuficiente em qualquer etapa. | [ver](./docs/adr/ADR-012-Controle-de-Estoque-de-Insumos.md) |
+| ADR-011 — Envio de E-mail de Orçamento | Notifica o cliente por e-mail ao gerar orçamento via porta de saída `IOrcamentoEmailSender` e provedor Resend. A API funciona normalmente sem a ApiKey; o envio de e-mail é desabilitado. Desde a fase 4, o e-mail de mudança de status sai quando a Management consome o evento `OrdemServicoStatusAlterado`. | [ver](./docs/adr/ADR-011-Envio-de-Email-de-Orcamento.md) |
+| ADR-012 — Controle de Estoque de Insumos | Verifica estoque ao gerar orçamento (sem reserva) e debita automaticamente ao aprovar, nas rotas `/api/orcamentos/{ordemServicoId}`. Lança `DomainException` se houver estoque insuficiente em qualquer etapa. | [ver](./docs/adr/ADR-012-Controle-de-Estoque-de-Insumos.md) |
 | ADR-013 — Tratamento de Erros em Duas Camadas | Erros de negócio esperados são tratados nos controllers com resposta HTTP semântica (4xx). Erros inesperados são capturados pelo middleware global, evitando vazamento de stack trace. | [ver](./docs/adr/ADR-013-Estrategia-de-Tratamento-de-Erros-em-Duas-Camadas.md) |
-| ADR-014 — Observabilidade com Datadog | A API escreve logs JSON no stdout (Serilog) com eventos de negócio, e o tracer é injetado no cluster, sem mudar a imagem. Métricas de negócio derivadas dos logs, monitores, synthetics e dashboard ficam em Terraform em `kubernetes/infra/addons`. | [ver](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) |
-| ADR-015 — Comunicação Síncrona via API Gateway | Os clientes falam com a API por HTTPS (REST e JSON), sempre pelo API Gateway. Não há filas nem mensageria. | [ver](./docs/adr/ADR-015-Comunicacao-Sincrona-via-API-Gateway.md) |
-| ADR-016 — Escalabilidade da API com HPA | A API tem um HPA que mantém de 1 a 10 pods conforme o uso de CPU (alvo de 30%) e de memória (alvo de 150%), medido pelo Metrics Server. Os 2 nós do cluster são fixos. | [ver](./docs/adr/ADR-016-Escalabilidade-com-HPA.md) |
-| ADR-017 — PostgreSQL no Amazon RDS e Modelo de Dados | Justificativa formal da escolha do PostgreSQL no Amazon RDS, com o diagrama ER e a explicação dos relacionamentos entre as tabelas. | [ver](./docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md) |
+| ADR-014 — Observabilidade com Datadog | As APIs escrevem logs JSON no stdout (Serilog) com eventos de negócio, e o tracer é injetado no cluster, sem mudar a imagem. Métricas de negócio derivadas dos logs, monitores, synthetics e dashboard ficam em Terraform em `kubernetes/infra/addons` e cobrem a Management API e o OS Service. | [ver](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) |
+| ADR-015 — Comunicação Síncrona via API Gateway | Os clientes falam com as APIs por HTTPS (REST e JSON), sempre pelo API Gateway. Não há chamadas HTTP entre as APIs; entre os serviços, a comunicação é por eventos (ADR-020). | [ver](./docs/adr/ADR-015-Comunicacao-Sincrona-via-API-Gateway.md) |
+| ADR-016 — Escalabilidade da API com HPA | Cada API tem um HPA que mantém de 1 a 5 pods conforme o uso de CPU (alvo de 30%) e de memória (alvo de 150%), medido pelo Metrics Server. Os 2 nós do cluster são fixos. | [ver](./docs/adr/ADR-016-Escalabilidade-com-HPA.md) |
+| ADR-017 — PostgreSQL no Amazon RDS e Modelo de Dados | Justificativa formal da escolha do PostgreSQL no Amazon RDS, com o diagrama ER e a explicação dos relacionamentos entre as tabelas da Management. | [ver](./docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md) |
 | ADR-018 — Monorepo e API Única (Management) | Junta os repositórios APP, DB e K8S da fase 3 neste monorepo, com pipelines unificados. Remove as 4 APIs dedicadas e renomeia a Monolith para Management. | [ver](./docs/adr/ADR-018-Monorepo-e-API-Unica-Management.md) |
+| ADR-019 — OS Service, microsserviço com banco próprio (repo OS-SERVICE) | Tira o ciclo de vida da OS e os indicadores da Management e cria o OS Service, com banco, namespace e pipelines próprios. A OS guarda só os ids dos cadastros. | [ver](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) |
+| ADR-020 — Eventos com SQS e Saga Coreografada | Os serviços trocam eventos em filas Amazon SQS FIFO, uma de entrada por serviço, numa saga coreografada com compensação. Define o envelope, os eventos, a idempotência, a DLQ e as credenciais (usuário IAM por serviço, com a chave no SSM). | [ver](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md) |
 
 | RFC | Resumo | Link |
 |-----|--------|------|
 | RFC-001 — Escolha da nuvem | Compara AWS, Azure e Google Cloud. Resultado: AWS, na região `us-east-1`. | [ver](./docs/rfc/RFC-001-Escolha-da-Nuvem.md) |
 | RFC-002 — Escolha do banco de dados | Compara PostgreSQL, Aurora, MySQL, SQL Server, DynamoDB, MongoDB e PostgreSQL dentro do EKS. Resultado: PostgreSQL no Amazon RDS. | [ver](./docs/rfc/RFC-002-Escolha-do-Banco-de-Dados.md) |
 | RFC-003 — Estratégia de autenticação (repo LAMBDA) | Compara onde validar o token e como gravar o CPF nele. Resultado: Lambda authorizer exigindo a claim `cpf`, com o JWT emitido pelo Auth0. | [ver](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658/blob/main/docs/rfc/RFC-003-Estrategia-de-Autenticacao.md) |
+| RFC-004 — Comunicação entre microsserviços | Compara HTTP entre as APIs, SQS Standard e FIFO, SNS, EventBridge, Kafka e RabbitMQ, e orquestração com coreografia. Resultado: SQS FIFO com saga coreografada. | [ver](./docs/rfc/RFC-004-Comunicacao-entre-Microsservicos.md) |
 
 ### 2.2. Autenticação
 
@@ -125,10 +143,10 @@ Todos os endpoints exigem autenticação por padrão (política de fallback `Req
 
 **Você não precisa criar uma conta no Auth0.** A Collection do Postman em `/e2e` já possui um request configurado com as credenciais de demonstração para obter o token de acesso via password grant (Resource Owner Password).
 
-Na AWS, o API Gateway (em `kubernetes/infra/foundation`) tem um Lambda authorizer, do repositório LAMBDA, que exige, além do JWT válido, a claim `cpf` do cliente.
+Na AWS, o API Gateway (em `kubernetes/infra/foundation`) tem um Lambda authorizer, do repositório LAMBDA, que exige, além do JWT válido, a claim `cpf` do cliente. Ele protege as rotas das duas APIs (`/management/...` e `/os/...`).
 - **Como o token é gerado:** pela Lambda `POST /auth/token` (`{"email","senha","cpf"}`), que confere o cliente no banco e pede ao Auth0 o JWT já com a claim.
 - **Exceção:** só o cadastro de cliente (`POST /management/api/clientes`) aceita o token direto do Auth0, sem `cpf`.
-- **Na API:** o código não muda; ela continua validando o JWT normalmente.
+- **Na API:** o código não muda; ela continua validando o JWT normalmente. O OS Service valida o mesmo JWT, com a mesma configuração do Auth0.
 
 O fluxo está no [diagrama de sequência da autenticação](./docs/arquitetura.md#3-diagrama-de-sequência-autenticação), e as opções avaliadas, na [RFC-003](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658/blob/main/docs/rfc/RFC-003-Estrategia-de-Autenticacao.md) do repo LAMBDA.
 
@@ -196,6 +214,9 @@ Esse projeto foi construído usando os padrões descritos abaixo.
 - Domain Exceptions para regras de negócio e invariantes
   - ADR: [ADR-002](./docs/adr/ADR-002-DDD-e-Entidades-Ricas.md)
   - Codigo: [Exceptions](./server/4%20-%20Enterprise%20Business%20Rules/TechChallenge.Oficina.Entities/Exceptions/)
+- Eventos e Saga coreografada (com compensação), entre a Management e o OS Service
+  - ADR: [ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)
+  - Codigo: [Messaging](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Messaging/), [EventosController](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/Eventos/EventosController.cs) e [OrdemServicoReferenciaUseCases](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs)
 
 ### 3.5. Referências
 
@@ -255,6 +276,7 @@ Passo 2 - ajuste as variáveis conforme necessário, principalmente:
 - `API_MANAGEMENT_PORT`
 - `DATABASE_CONNECTION_STRING`
 - `RESEND_API_KEY` (opcional)
+- `ELASTICMQ_PORT`, `SQS_FILA_CONSUMO`, `SQS_FILA_PUBLICACAO` e `SQS_SERVICE_URL` (filas do SQS local; os padrões já funcionam)
 
 > O `.env.example` traz `REGISTRY_PREFIX` apontando para o ECR. Localmente, isso só muda o nome da imagem gerada. Se preferir um nome curto, deixe a variável vazia.
 
@@ -266,31 +288,45 @@ Se estiver usando o podman, use `podman compose up -d --build`
 
 E pronto!
 
-O banco de dados `postgres` e a `management-api` estarão disponíveis.
+O banco de dados `postgres`, o `elasticmq` (o SQS local, com as quatro filas FIFO do `elasticmq.conf`) e a `management-api` estarão disponíveis.
 
 Passo 2 - Use `http://localhost:7194/index.html` para acessar o swagger.
 
 ### 4.3. Alternativa B - Local com dotnet cli
 
-Passo 1 - rode o `postgres` - pode ser uma instância local ou via container `docker compose up -d postgres`.
+Passo 1 - rode o `postgres` e o `elasticmq` via container: `docker compose up -d postgres elasticmq`. O Postgres também pode ser uma instância local.
 
 Passo 2 - aponte o console para a pasta `server/1 - Frameworks & Drivers/TechChallenge.Oficina.Management.API/` e então execute `dotnet run`
 
 Pronto!
 
-A API sobe em `http://localhost:7194`, conforme o perfil `http` do `launchSettings.json`.
+A API sobe em `http://localhost:7194`, conforme o perfil `http` do `launchSettings.json`. Esse perfil usa o ambiente `Development`, cujo `appsettings.Development.json` aponta o SQS para o ElasticMQ (`http://localhost:9324`), e define credenciais AWS fictícias (`local`), que o ElasticMQ aceita.
 
 Passo 3 - Use `http://localhost:7194/index.html` para acessar o Swagger.
 
 ### 4.4. Alternativa C - Local com Visual Studio 2026 ou VS Code
 
-Passo 1 - rode o `postgres` - pode ser uma instância local ou via container `docker compose up -d postgres`.
+Passo 1 - rode o `postgres` e o `elasticmq` via container: `docker compose up -d postgres elasticmq`.
 
 Passo 2 - abra o arquivo `.slnx` em `/server`
 
 Passo 3 - no Visual Studio, rode usando o perfil `http`.
 
 Passo 4 - Use `http://localhost:7194/index.html` para acessar o Swagger.
+
+### 4.4.1. Saga local com o OS Service
+
+Sozinha, a Management atende os cadastros normalmente, mas o orçamento precisa de uma OS que ela conheça, e as OS chegam por eventos do OS Service. Para ver a saga funcionando, rode também o [OS Service](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), com os dois serviços usando o ElasticMQ da Management (container `oficina-elasticmq`):
+
+1. Neste repositório: `podman compose up -d` (ou `docker compose up -d`).
+2. No repositório OS-SERVICE, suba o compose apontando o SQS para o ElasticMQ da Management:
+   - bash: `SQS_SERVICE_URL=http://oficina-elasticmq:9324 podman compose up -d`
+   - PowerShell: `$env:SQS_SERVICE_URL="http://oficina-elasticmq:9324"; podman compose up -d`
+3. Ligue o container do OS Service à rede do compose da Management, para ele achar o ElasticMQ pelo nome do container:
+   - `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-os-service-api` (no Docker, `docker network connect ...` com os mesmos argumentos).
+   - O nome da rede vem do nome da pasta deste repositório (o nome do projeto do compose, em minúsculas) mais `_default`. Se a pasta tiver outro nome, confira com `podman network ls`.
+
+A Management fica em `http://localhost:7194` e o OS Service, em `http://localhost:7195`. Para testar, use a pasta **Saga** da collection do Postman do repo OS-SERVICE.
 
 
 ### 4.5. Banco de dados
@@ -307,7 +343,7 @@ Na AWS, o banco é o Amazon RDS criado pelo Terraform de [DB/](./DB/README.md).
 
 ### 4.6. Rodando os testes
 
-Os testes automatizados estão organizados em `server/Tests/` por camada da arquitetura. Eles usam banco em memória e mocks, sem precisar de Postgres ou Docker.
+Os testes automatizados estão organizados em `server/Tests/` por camada da arquitetura. Eles usam banco em memória e mocks (inclusive do SQS), sem precisar de Postgres, ElasticMQ ou Docker.
 
 Para executar todos os testes da solução, use:
 
@@ -326,39 +362,55 @@ Verifique se `AuthSettings:Authority` e `AuthSettings:Audience` no `appsettings.
 3. E-mail não está sendo enviado
 Sem `RESEND_API_KEY` (container) ou `ApiKey` no `appsettings.json` (execução local), a API continua funcionando, mas o envio de e-mail fica desabilitado por configuração. O e-mail de mudança de status também depende de `ResendSettings:SendEmailOnStatusChange`, que é `false` nos `appsettings.json`. Para ligá-lo, defina `ResendSettings__SendEmailOnStatusChange=true`.
 
+4. Porta 9324 em uso
+Altere `ELASTICMQ_PORT` no `.env`. Na execução com `dotnet run`, ajuste também `SqsSettings:ServiceUrl` no `appsettings.Development.json`.
+
+5. Logs `integracao.falha` com `Integracao` = `sqs` a cada poucos segundos
+O consumidor não alcança o ElasticMQ (container parado ou URL errada). Suba o `elasticmq` e confira `SQS_SERVICE_URL`/`SqsSettings:ServiceUrl`. Sem a fila, as rotas que publicam eventos (gerar, aprovar e recusar orçamento) respondem 500.
+
+6. Gerar o orçamento responde 404 ("Ordem de servico nao encontrada")
+A Management ainda não recebeu o evento da OS: o OS Service não está rodando com o mesmo ElasticMQ (seção 4.4.1), a OS foi rejeitada por um cadastro inexistente, ou o evento ainda está a caminho. Aguarde alguns segundos e tente de novo.
+
 ## 5. Requisitos Implementados
 
-Abaixo, você encontra uma tabela com o resumo dos requisitos implementados: os de negócio e os de observabilidade (R1 a R7). Todos são atendidos pela Management API. As rotas abaixo ficam sob `/api/ordens-servico`; na AWS, elas ganham o prefixo `/management` do API Gateway.
+Abaixo, você encontra uma tabela com o resumo dos requisitos implementados: os de negócio e os de observabilidade (R1 a R7). Na fase 4, os requisitos do ciclo de vida da OS (abertura, consulta de status, listagem, mudanças de status e indicadores) passaram para o OS Service: as evidências estão nos [requisitos atendidos do repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos). As rotas da Management ficam na raiz da API e, na AWS, ganham o prefixo `/management` do API Gateway; as do OS Service ganham o prefixo `/os`.
 
 | Requisito | Atende? | Observação de escopo | Rota | Evidências |
 |---|---|---|---|---|
-| Consulta de status da Ordem de Serviço (OS) | Sim | Acompanhamento da OS com o status atual. | `GET /api/ordens-servico/{id}/acompanhamento` | [Endpoints OS](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Features/OrdensServico/OrdensServicoEndpoints.cs) · [Controller OS](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/OrdensServico/OrdensServicoController.cs) |
-| Aprovação/recusa de orçamento por endpoint externo | Sim | Aprovação e recusa implementadas no fluxo da OS. | `POST /api/ordens-servico/{id}/aprovar-orcamento` e `POST /api/ordens-servico/{id}/recusar-orcamento` | [Endpoints OS](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Features/OrdensServico/OrdensServicoEndpoints.cs) · [UseCases OS](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoUseCases.cs) |
-| Abertura de OS com cliente, veículo, serviços e peças, retornando ID único | Sim | Abertura completa com retorno da identificação da OS. | `POST /api/ordens-servico/completa` | [Controller OS](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/OrdensServico/OrdensServicoController.cs) · [ViewModel Abertura](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/ViewModels/AberturaOrdemServicoViewModel.cs) |
-| Listagem de OS por prioridade + antiguidade, excluindo finalizadas/entregues | Sim | Escopo acordado: endpoint ordenado /ordenadas. | `GET /api/ordens-servico/ordenadas` | [Gateway OS](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.DB/Features/OrdensServico/OrdemServicoGateway.cs) · [Query Ordenada](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Queries/ListarOrdensServicoOrdenadasQuery.cs) |
-| Atualização de status da OS com notificação ao cliente | Sim | A cada mudança de status da OS, o cliente é notificado por e-mail no fluxo de controller/use case. | `POST /api/ordens-servico/{id}/em-diagnostico`, `/em-execucao`, `/finalizar` e `/entregar` | [Endpoints OS](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Features/OrdensServico/OrdensServicoEndpoints.cs) · [UseCases OS](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoUseCases.cs) · [Sender Status](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Email/Features/OrdensServico/OrdemServicoStatusEmailSender.cs) |
-| R1 — Latência da API | Sim | APM com o tracer .NET injetado pelo Datadog Agent no cluster, sem mudança no código ou no Dockerfile. Latência p95 por serviço no monitor e no dashboard; por rota, na página do serviço no APM. | `service` = `management-api` | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
-| R2 — Consumo de recursos do Kubernetes na AWS | Sim | Datadog Agent (DaemonSet + Cluster Agent) instalado pelo `kubernetes/infra/addons`. Monitores de CPU e memória em relação ao limit, restarts, CrashLoopBackOff e nós, mais widgets. | Cluster EKS | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
-| R3 — Healthchecks e uptime | Sim | `/health/ready` verifica o banco e é consultado pelo `http_check` do Datadog Agent; o `/health` não muda. Uptime externo por Synthetics em `GET /management/health` pelo API Gateway, com SLO. | `/health` e `/health/ready` | [Program.cs](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Program.cs) · [Health check do banco](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.DB/Extensions.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 6) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
-| R4 — Falhas no processamento de OS | Sim | Eventos de log `os.falha` por etapa (regra de negócio), `integracao.falha` (Resend) e `http.erro_nao_tratado` (500, identificando banco indisponível), mais 5xx por rota no APM. Viram métricas, monitores e widgets. | Fluxo de OS | [docs/observabilidade.md](./docs/observabilidade.md) (seções 3 e 5) · [Eventos OS](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs) · [Controller OS](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/OrdensServico/OrdensServicoController.cs) · [UseCases OS](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoUseCases.cs) · [Middleware](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Middleware/GlobalExceptionHandlerMiddleware.cs) |
-| R5 — Logs estruturados (JSON) | Sim | Serilog com 1 JSON por linha no stdout e chaves que o Datadog reconhece sem configuração (`timestamp`, `level`, `message`, `evento`, `dd.*` e `error.*`). | Toda a API | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 2) |
-| R6 — Correlação entre logs e traces | Sim | Dentro da API: o tracer injeta `dd.trace_id` e `dd.span_id` em cada log, que abre o trace no APM. API Gateway e Lambdas não são rastreados (limitação registrada na ADR-014). | Toda a API | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) |
+| Consulta de status da Ordem de Serviço (OS) | Sim, no OS Service | Acompanhamento da OS com o status atual, o histórico, o valor do orçamento e o motivo do cancelamento. | `GET /os/api/ordens-servico/{id}/acompanhamento` | [Repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos) |
+| Aprovação/recusa de orçamento por endpoint externo | Sim | O orçamento é da Management. A decisão chega ao OS Service por evento (`OrcamentoAprovado` ou `OrcamentoRecusado`), que muda o status da OS. | `POST /api/orcamentos/{ordemServicoId}/aprovar` e `POST /api/orcamentos/{ordemServicoId}/recusar` | [Endpoints Orçamento](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Features/Orcamentos/OrcamentoEndpoints.cs) · [UseCases Orçamento](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/Orcamentos/UseCases/OrcamentoUseCases.cs) |
+| Geração, consulta e envio do orçamento por e-mail | Sim | Gerar confere o estoque (ADR-012) e avisa o OS Service (`OrcamentoGerado`); enviar manda o orçamento ao e-mail do cliente (ADR-011). | `POST /api/orcamentos/{ordemServicoId}/gerar`, `GET /api/orcamentos/{ordemServicoId}` e `POST /api/orcamentos/{ordemServicoId}/enviar` | [Endpoints Orçamento](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Features/Orcamentos/OrcamentoEndpoints.cs) · [Controller Orçamento](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/Orcamentos/OrcamentosController.cs) · [Sender Orçamento](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Email/Features/Orcamentos/OrcamentoEmailSender.cs) |
+| Abertura de OS com cliente, veículo e serviços, retornando ID único | Sim, no OS Service | A OS é aberta no OS Service com os ids de cadastros que já existem. A Management valida o cliente, o veículo (do cliente) e os serviços ao receber o evento `OrdemServicoAberta`; se algo não existir, a OS é cancelada (compensação). A antiga abertura completa (`/completa`) foi removida. | `POST /os/api/ordens-servico` | [Validação na Management](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [Repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos) |
+| Listagem de OS por prioridade + antiguidade, excluindo finalizadas/entregues | Sim, no OS Service | Escopo acordado: endpoint ordenado /ordenadas (também exclui as canceladas). | `GET /os/api/ordens-servico/ordenadas` | [Repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos) |
+| Atualização de status da OS com notificação ao cliente | Sim | O status muda no OS Service, que publica `OrdemServicoStatusAlterado`. A Management consome o evento e avisa o cliente por e-mail (desligado por padrão, seção 4.7). | `POST /os/api/ordens-servico/{id}/em-diagnostico`, `/em-execucao`, `/finalizar` e `/entregar` | [Consumo do evento](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [Sender Status](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Email/Features/OrdensServico/OrdemServicoStatusEmailSender.cs) · [Repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos) |
+| Comunicação entre os serviços (saga) | Sim | Eventos em filas Amazon SQS FIFO, saga coreografada com compensação, DLQ e consumidores idempotentes. | Filas `techchallenge-oficina-management.fifo` e `techchallenge-oficina-os-service.fifo` | [ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md) · [Messaging](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Messaging/) · [EventosController](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/Eventos/EventosController.cs) · [SQS/README.md](./SQS/README.md) |
+| R1 — Latência da API | Sim | APM com o tracer .NET injetado pelo Datadog Agent no cluster, sem mudança no código ou no Dockerfile. Latência p95 por serviço no monitor e no dashboard; por rota, na página do serviço no APM. | `service` = `management-api` e `os-service-api` | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
+| R2 — Consumo de recursos do Kubernetes na AWS | Sim | Datadog Agent (DaemonSet + Cluster Agent) instalado pelo `kubernetes/infra/addons`. Monitores de CPU e memória em relação ao limit, restarts, CrashLoopBackOff e nós, mais widgets. Os monitores por deployment cobrem o namespace `oficina` (limitação registrada na ADR-014). | Cluster EKS | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
+| R3 — Healthchecks e uptime | Sim | `/health/ready` verifica o banco e é consultado pelo `http_check` do Datadog Agent; o `/health` não muda. Uptime externo por Synthetics em `GET /management/health` e `GET /os/health` pelo API Gateway, com SLO. | `/health` e `/health/ready` | [Program.cs](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Program.cs) · [Health check do banco](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.DB/Extensions.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 6) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
+| R4 — Falhas no processamento de OS | Sim | Eventos de log `os.falha` por etapa (regra de negócio, nos dois serviços), `integracao.falha` (Resend e SQS) e `http.erro_nao_tratado` (500, identificando banco indisponível), mais 5xx por rota no APM. Viram métricas, monitores e widgets. | Fluxo de OS e orçamento | [docs/observabilidade.md](./docs/observabilidade.md) (seções 3 e 5) · [Eventos](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs) · [Controller Orçamento](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/Orcamentos/OrcamentosController.cs) · [UseCases Orçamento](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/Orcamentos/UseCases/OrcamentoUseCases.cs) · [Middleware](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Middleware/GlobalExceptionHandlerMiddleware.cs) |
+| R5 — Logs estruturados (JSON) | Sim | Serilog com 1 JSON por linha no stdout e chaves que o Datadog reconhece sem configuração (`timestamp`, `level`, `message`, `evento`, `dd.*` e `error.*`). | As duas APIs | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 2) |
+| R6 — Correlação entre logs e traces | Sim | Dentro de cada API: o tracer injeta `dd.trace_id` e `dd.span_id` em cada log, que abre o trace no APM. Entre os serviços, os logs `evento.*` levam o `OrdemServicoId` e o id do evento. API Gateway e Lambdas não são rastreados (limitação registrada na ADR-014). | As duas APIs | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) |
 | R7 — Dashboard | Sim | 1 dashboard: OS criadas e encerradas por dia, tempo médio por status, falhas (de negócio por etapa e 5xx por rota), erros de integração e seções técnicas de R1 a R3. Os widgets de negócio só recebem dados durante o trial de 14 dias do Datadog. | Datadog | [docs/observabilidade.md](./docs/observabilidade.md) (seção 5) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
 
 ## 6. Infraestrutura
 
-A infraestrutura fica em duas pastas deste monorepo. As Lambdas de autenticação ficam no repositório LAMBDA.
+A infraestrutura fica em três pastas deste monorepo. O OS Service tem o próprio banco e os próprios manifests no repositório OS-SERVICE, e as Lambdas de autenticação ficam no repositório LAMBDA.
 
 | Parte | Onde | Responsabilidade |
 |---|---|---|
 | Aplicação | [server/](./server/) | Código .NET, testes e imagem Docker, publicada no Amazon ECR |
-| Cluster e borda | [kubernetes/](./kubernetes/README.md) | VPC, Amazon EKS, Amazon API Gateway (acesso externo à API), VPC Link e NLB interno, addons (Metrics Server e Datadog Agent), recursos do Datadog (métricas de log, monitores, synthetics e dashboard) e manifests Kubernetes da API. O pipeline gera o Secret com a connection string do RDS e a chave do Resend |
+| Cluster e borda | [kubernetes/](./kubernetes/README.md) | VPC, Amazon EKS, Amazon API Gateway (acesso externo às duas APIs: `/management` e `/os`), VPC Link e NLB interno, addons (Metrics Server e Datadog Agent), recursos do Datadog (métricas de log, monitores, synthetics e dashboard) e manifests Kubernetes da Management API. O pipeline gera o Secret com a connection string do RDS, a chave do Resend e a chave do SQS |
 | Banco | [DB/](./DB/README.md) | Amazon RDS PostgreSQL. O schema é criado pelas migrations da API, no startup (ADR-009) |
+| Filas | [SQS/](./SQS/README.md) | Duas filas Amazon SQS FIFO (uma de entrada por serviço), com DLQ, um usuário IAM por serviço e as chaves de acesso no SSM Parameter Store |
+| OS Service | [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) (outro repositório) | Código do OS Service, o RDS dele (`techchallenge-oficina-os-postgres`) e os manifests no namespace `os-service`. Usa a VPC, o EKS, a rota `/os` do API Gateway, o NLB (NodePort 30081) e as filas criados aqui |
 | Autenticação | [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658) (outro repositório) | Lambda authorizer do API Gateway (JWT do Auth0 com a claim `cpf`) e Lambda `POST /auth/token`, que gera o JWT com o CPF do cliente |
 
-**Ordem para subir:** o **Bootstrap** deste repositório roda tudo na sequência: testes → foundation → addons → RDS → imagem no ECR → manifests. Depois, rode o **Deploy do repo LAMBDA**, que usa a VPC e o RDS criados aqui.
+**Ordem para subir:**
+1. **Bootstrap** deste repositório, que roda tudo na sequência: testes → foundation → addons → RDS → imagem no ECR → manifests. As filas SQS sobem em paralelo, logo depois dos testes, e antes dos manifests.
+2. **Bootstrap do repo OS-SERVICE**, que usa a VPC, o EKS, a rota `/os` e as filas criados aqui.
+3. **Deploy do repo LAMBDA**, que usa a VPC e o RDS criados aqui.
 
-**Ordem para derrubar:** primeiro o **Destroy do repo LAMBDA**, depois o **Destroy deste repositório**, que remove RDS → addons → foundation.
+**Ordem para derrubar:** primeiro o **Destroy do repo LAMBDA** e o **Destroy do repo OS-SERVICE**, depois o **Destroy deste repositório**, que remove o SQS (em paralelo) e RDS → addons → foundation. O Destroy deste repositório falha se o SG da Lambda, o RDS do OS Service ou o SG dele ainda existirem.
 
 O ECR é criado manualmente e fica fora de qualquer `destroy` (6.2).
 
@@ -368,6 +420,7 @@ flowchart LR
     Code[server/\nCodigo + testes] --> Image[docker compose build\nmanagement-api]
     Infra[kubernetes/infra\nVPC, EKS, API Gateway, NLB, addons]
     DBTF[DB/infra\nRDS]
+    SQSTF[SQS/infra\nfilas, usuarios IAM e SSM]
     Manifests[kubernetes/k8s\nmanifests]
   end
 
@@ -377,7 +430,10 @@ flowchart LR
   EKS -->|pull| ECR
   EKS -->|PostgreSQL 5432| RDS[Amazon RDS]
   DBTF --> RDS
+  SQSTF --> SQS[Amazon SQS\nfilas FIFO]
+  EKS -->|publica e consome eventos| SQS
   LAMBDA[Repo LAMBDA\nauthorizer e /auth/token] -.->|usa a VPC e o RDS| RDS
+  OSREPO[Repo OS-SERVICE\nOS Service e o RDS dele] -.->|usa a VPC, o EKS, a rota /os e as filas| EKS
 ```
 
 ### 6.1 Contrato entre as partes
@@ -387,20 +443,21 @@ flowchart LR
 | Imagem | `903936907231.dkr.ecr.us-east-1.amazonaws.com/techchallenge-oficina-management:latest`, o mesmo nome do `docker-compose.yml`. O manifest em `kubernetes/k8s` usa `:latest` com `imagePullPolicy: Always` |
 | Porta e health | A API escuta em `8080` e expõe `/health` sem autenticação. Ele é usado pelas probes do Kubernetes, pelo health check do NLB do API Gateway e pelos synthetics do Datadog |
 | Health com banco | A API expõe `/health/ready` sem autenticação: verifica o banco e responde `Healthy` (200) ou `Unhealthy` (503). É consultado só pelo `http_check` do Datadog Agent. O `readinessProbe` e o NLB continuam em `/health`, que não depende do banco |
-| Rotas | As rotas ficam na raiz (`/api/...` e `/health`), sem `PathBase`. O API Gateway recebe `/management/...` e remove o prefixo antes de encaminhar. `POST /auth/token` vai para a Lambda do repo LAMBDA |
-| Configuração | Na AWS, `DatabaseSettings__ConnectionString` e `ResendSettings__ApiKey` vêm do Secret `oficina-api-secrets`, gerado pelo pipeline (`_k8s-apply.yml`). O ConfigMap `management-api-config` define só `ASPNETCORE_*`, `AllowedHosts` e o nível de log. Ele sobrescreve a seção `Serilog` do `appsettings.json` com `Serilog__MinimumLevel__Default` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore`. `AuthSettings` e o restante de `ResendSettings` (`FromEmail`, `SendEmailOnStatusChange`) vêm do `appsettings.json` da imagem |
-| Logs | JSON no stdout, 1 por linha (Serilog), com `timestamp`, `level`, `message`, `evento`, `logger.name`, `dd.*`, `error.*` e as propriedades dos eventos. O Datadog Agent coleta o stdout dos pods. As métricas de log, os monitores e o dashboard dependem dos nomes de eventos, propriedades e valores de [docs/observabilidade.md](./docs/observabilidade.md) |
-| Datadog | O Deployment tem as labels `tags.datadoghq.com/env: study` e `tags.datadoghq.com/service: management-api`, que definem as tags `env` e `service` de logs, traces e métricas. O Agent injeta o tracer .NET nos pods do namespace `oficina` |
-| Banco | As migrations do EF Core rodam no startup da API. Com um RDS novo (vazio), as tabelas são criadas quando a API sobe. A Lambda `buscar-cliente` do repo LAMBDA lê a tabela `clientes` |
+| Rotas | As rotas ficam na raiz (`/api/...` e `/health`), sem `PathBase`. O API Gateway recebe `/management/...` e remove o prefixo antes de encaminhar. `/os/...` vai para o OS Service (repo OS-SERVICE), e `POST /auth/token`, para a Lambda do repo LAMBDA |
+| Configuração | Na AWS, `DatabaseSettings__ConnectionString`, `ResendSettings__ApiKey`, `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` (chave do usuário IAM da Management no SQS, lida do SSM) vêm do Secret `oficina-api-secrets`, gerado pelo pipeline (`_k8s-apply.yml`). O ConfigMap `management-api-config` define `ASPNETCORE_*`, `AllowedHosts`, o nível de log, as filas (`SqsSettings__FilaConsumo` e `SqsSettings__FilaPublicacao`) e o `AWS_REGION`. Ele sobrescreve a seção `Serilog` do `appsettings.json` com `Serilog__MinimumLevel__Default` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore`. `AuthSettings` e o restante de `ResendSettings` (`FromEmail`, `SendEmailOnStatusChange`) vêm do `appsettings.json` da imagem |
+| Eventos | A API consome a fila `techchallenge-oficina-management.fifo` e publica na `techchallenge-oficina-os-service.fifo`, com o envelope e os eventos da [ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md). O OS Service faz o inverso. As filas são criadas por [SQS/](./SQS/README.md) |
+| Logs | JSON no stdout, 1 por linha (Serilog), com `timestamp`, `level`, `message`, `evento`, `logger.name`, `dd.*`, `error.*` e as propriedades dos eventos. O Datadog Agent coleta o stdout dos pods. As métricas de log, os monitores e o dashboard dependem dos nomes de eventos, propriedades e valores de [docs/observabilidade.md](./docs/observabilidade.md), que o OS Service também segue |
+| Datadog | O Deployment tem as labels `tags.datadoghq.com/env: study` e `tags.datadoghq.com/service: management-api`, que definem as tags `env` e `service` de logs, traces e métricas. O Agent injeta o tracer .NET nos pods dos namespaces `oficina` e `os-service` (OS Service, `os-service-api`) |
+| Banco | As migrations do EF Core rodam no startup da API. Com um RDS novo (vazio), as tabelas são criadas quando a API sobe. A Lambda `buscar-cliente` do repo LAMBDA lê a tabela `clientes`. O OS Service não acessa este banco |
 
 ### 6.2 ECR (manual)
 
-Crie uma vez, em `us-east-1`, o repositório privado `techchallenge-oficina-management` com *tag mutability* **MUTABLE**. A tag `latest` é sobrescrita a cada push, e com IMMUTABLE o segundo push falha.
+Crie uma vez, em `us-east-1`, o repositório privado `techchallenge-oficina-management` com *tag mutability* **MUTABLE**. A tag `latest` é sobrescrita a cada push, e com IMMUTABLE o segundo push falha. O repo OS-SERVICE usa outro repositório ECR, o `techchallenge-oficina-os-service`, também manual e MUTABLE.
 
 ### 6.3 Observabilidade (Datadog)
 
 A API escreve logs em JSON no stdout, 1 por linha (Serilog):
-- com eventos de negócio do fluxo de OS (`os.criada`, `os.status_alterado`, `os.falha` etc.);
+- com eventos de negócio do orçamento e da validação da OS (`os.orcamento_gerado`, `os.falha` etc.) e da troca de eventos com o OS Service (`evento.publicado`, `evento.consumido` e `evento.ignorado`). Os eventos do ciclo de vida da OS (`os.criada`, `os.status_alterado` e `os.encerrada`) saem do OS Service (`os-service-api`), no mesmo formato;
 - com erros em `error.*`.
 
 Na AWS, o Datadog Agent (instalado por `kubernetes/infra/addons`) coleta esses logs e injeta o tracer .NET nos pods (APM). Isso não exige mudança no código nem no Dockerfile, e cada log traz o `dd.trace_id` da requisição. O `/health/ready` verifica o banco para o `http_check` do Agent.
@@ -413,13 +470,13 @@ Localmente, o `docker compose` mostra o mesmo JSON, só sem o objeto `dd`, porqu
 
 ## 7. Fluxo de Deploy (CI/CD)
 
-O CI/CD usa GitHub Actions, com pipelines únicos para a aplicação, o banco e o cluster. Os detalhes estão em [.github/workflows/README.md](./.github/workflows/README.md).
+O CI/CD usa GitHub Actions, com pipelines únicos para a aplicação, o banco, as filas e o cluster. Os detalhes estão em [.github/workflows/README.md](./.github/workflows/README.md).
 
-- **Bootstrap** (manual): testes → foundation → addons → RDS → build e push da imagem → `kubectl apply` com restart. Use na primeira criação, para recriar o ambiente depois do Destroy e para reaplicar a HEAD da `main`.
+- **Bootstrap** (manual): testes → foundation → addons → RDS → build e push da imagem → `kubectl apply` com restart. As filas SQS (`SQS/infra`) sobem em paralelo, logo depois dos testes, e antes do `kubectl apply`. Use na primeira criação, para recriar o ambiente depois do Destroy e para reaplicar a HEAD da `main`. Depois, rode o Bootstrap do repo OS-SERVICE e o Deploy do repo LAMBDA.
 - **Deploy**:
-  - **Pull Request para a `main`:** build e testes, validação offline do Terraform (foundation, addons e DB) e do Kustomize. Também roda os `plan` informativos.
-  - **Push na `main`:** aplica só o que mudou, na ordem: foundation → addons → RDS → imagem → manifests. O passo dos manifests reinicia a API.
-- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): confere que as Lambdas já foram destruídas e remove RDS → addons → foundation.
+  - **Pull Request para a `main`:** build e testes, validação offline do Terraform (foundation, addons, DB e SQS) e do Kustomize. Também roda os `plan` informativos.
+  - **Push na `main`:** aplica só o que mudou, na ordem: foundation → addons → RDS → imagem → manifests. O SQS é aplicado em paralelo, antes dos manifests. O passo dos manifests reinicia a API.
+- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): confere que as Lambdas e o RDS do OS Service já foram destruídos e remove o SQS (em paralelo) e RDS → addons → foundation.
 - **K8s Apply** (manual): reaplica os manifests e reinicia a API. Use, por exemplo, depois de trocar `RESEND_API_KEY`.
 - **Trocar `RDS_PASSWORD`:** rode o Bootstrap, que aplica a senha nova no RDS e recria o Secret da API. Depois rode o Deploy do repo LAMBDA.
 
@@ -427,7 +484,7 @@ O CI/CD usa GitHub Actions, com pipelines únicos para a aplicação, o banco e 
 flowchart LR
   subgraph Reusable[Workflows reutilizaveis]
     BT[_build-test.yml\nrestore, build e testes]
-    TF[_terraform.yml\nfoundation, addons e DB]
+    TF[_terraform.yml\nfoundation, addons, DB e SQS]
     BP[_build-push.yml\ndocker compose build/push]
     KA[_k8s-apply.yml\nkustomize / kubectl apply]
   end
@@ -435,21 +492,21 @@ flowchart LR
   B[Bootstrap\nmanual] --> BT --> TF --> BP --> KA
   PR[Deploy - pull_request] -->|build-test + validate + plan| BT
   PUSH[Deploy - push na main] -->|so o que mudou| TF
-  D[Destroy\nmanual] -->|DB, addons, foundation| TF
+  D[Destroy\nmanual] -->|SQS, DB, addons, foundation| TF
 ```
 
 Apply, destroy e o push da imagem só rodam a partir da `main`: disparados em outra branch, os jobs falham com erro.
 
-**Atenção ao primeiro push na `main`:** todos os arquivos entram como alterados. Por isso, o Deploy tenta aplicar tudo: foundation, addons, RDS, imagem e manifests. Isso **cria o ambiente inteiro na AWS (custo)**.
+**Atenção ao primeiro push na `main`:** todos os arquivos entram como alterados. Por isso, o Deploy tenta aplicar tudo: foundation, addons, RDS, SQS, imagem e manifests. Isso **cria o ambiente inteiro na AWS (custo)**. O mesmo vale para o primeiro push do repo OS-SERVICE, que cria o RDS dele.
 - **Se ainda não quiser subir o ambiente:** faça o primeiro push sem os secrets da AWS configurados. Os jobs de apply falham logo na credencial e não criam nada.
 - **Quando quiser subir:** configure tudo e rode o Bootstrap.
 
 Antes de subir o ambiente:
 - crie o ECR (6.2);
 - configure os secrets, as variables e o environment `destroy`;
-- libere ao usuário IAM `terraform` as novas chaves de state (`techchallenge-oficina/fase-4/*` no bucket `terraform-state-soat16`).
+- libere ao usuário IAM `terraform` as novas chaves de state (`techchallenge-oficina/fase-4/*` no bucket `terraform-state-soat16`) e as permissões de SQS, IAM e SSM usadas pelo `SQS/infra` ([SQS/README.md](./SQS/README.md)).
 
-Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md).
+Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md). Não há secret do GitHub para o SQS: as chaves vêm do SSM.
 
 **Desative também os workflows dos repositórios APP, DB e K8S da fase 3.** Eles usam os mesmos nomes de recursos na AWS e publicam no mesmo ECR. O ambiente da fase 3 precisa estar destruído antes do primeiro Bootstrap deste repositório.
 
@@ -458,6 +515,7 @@ Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md).
 Nessa seção, você encontra observações gerais.
 
 - Para fazer requisições, use a Collection do Postman na pasta `/e2e` (`TechChallenge.Oficina.Management.API.postman_collection.json`)
+  - ela cobre os cadastros (clientes, veículos, insumos e serviços). As ordens de serviço, o orçamento e a saga entre os serviços estão na collection do [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), que chama as duas APIs;
   - importe a collection no Postman
   - Em `variables`, altere para apontar a URL para onde está rodando o projeto.
   - Na AWS:

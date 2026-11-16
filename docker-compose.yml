@@ -17,6 +17,16 @@
       retries: 5
     restart: unless-stopped
 
+  # SQS local (filas FIFO definidas em elasticmq.conf) para a troca de eventos com o OS Service
+  elasticmq:
+    image: docker.io/softwaremill/elasticmq-native:1.6.14
+    container_name: oficina-elasticmq
+    ports:
+      - "${ELASTICMQ_PORT:-9324}:9324"
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+    restart: unless-stopped
+
   management-api:
     image: ${REGISTRY_PREFIX:-}techchallenge-oficina-management:${IMAGE_TAG:-latest}
     build:
@@ -26,6 +36,8 @@
     depends_on:
       postgres:
         condition: service_healthy
+      elasticmq:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       ASPNETCORE_URLS: ${ASPNETCORE_URLS:-http://+:8080}
@@ -34,6 +46,13 @@
       Serilog__MinimumLevel__Override__Microsoft.AspNetCore: ${LOG_LEVEL_ASPNETCORE:-Warning}
       DatabaseSettings__ConnectionString: ${DATABASE_CONNECTION_STRING:-Host=postgres;Port=5432;Database=oficina;Username=sa;Password=P@ssw0rd123}
       ResendSettings__ApiKey: ${RESEND_API_KEY}
+      SqsSettings__FilaConsumo: ${SQS_FILA_CONSUMO:-techchallenge-oficina-management.fifo}
+      SqsSettings__FilaPublicacao: ${SQS_FILA_PUBLICACAO:-techchallenge-oficina-os-service.fifo}
+      SqsSettings__ServiceUrl: ${SQS_SERVICE_URL:-http://elasticmq:9324}
+      # Credenciais ficticias para o ElasticMQ (nao valida assinatura); fixas para nunca herdar credenciais AWS reais do shell
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AWS_REGION: us-east-1
     ports:
       - "${API_MANAGEMENT_PORT:-7194}:8080"
     restart: unless-stopped

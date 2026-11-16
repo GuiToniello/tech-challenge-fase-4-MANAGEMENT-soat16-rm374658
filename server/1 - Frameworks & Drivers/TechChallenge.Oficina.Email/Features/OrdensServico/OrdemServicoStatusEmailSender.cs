@@ -1,11 +1,8 @@
 using System.Globalization;
 using System.Text;
 using Resend;
-using TechChallenge.Oficina.Entities.Exceptions;
-using TechChallenge.Oficina.Entities.Features.OrdensServico;
 using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Email.Configuration;
-using TechChallenge.Oficina.Email.Features.Orcamentos;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 
 namespace TechChallenge.Oficina.Email.Features.OrdensServico;
@@ -26,21 +23,20 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
     }
 
     public async Task EnviarStatusAlteradoAsync(
-        OrdemServico ordemServico,
+        NotificacaoStatusOrdemServico notificacao,
         string emailDestino,
-        StatusOrdemServico novoStatus,
         CancellationToken cancellationToken = default)
     {
         // Modo degradado: se não houver configuração ou se o envio de emails de status estiver desabilitado, apenas retorna sem erro
-        if (string.IsNullOrWhiteSpace(_resendSettings.ApiKey) || 
+        if (string.IsNullOrWhiteSpace(_resendSettings.ApiKey) ||
             string.IsNullOrWhiteSpace(_resendSettings.FromEmail) ||
             !_resendSettings.SendEmailOnStatusChange)
         {
             return;
         }
 
-        var assunto = CriarAssunto(ordemServico, novoStatus);
-        var html = CriarHtml(ordemServico, novoStatus);
+        var assunto = CriarAssunto(notificacao);
+        var html = CriarHtml(notificacao);
 
         await _resendClient.SendEmailAsync(new EmailMessage
         {
@@ -51,43 +47,42 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
         }, cancellationToken);
     }
 
-    private static string CriarAssunto(OrdemServico ordemServico, StatusOrdemServico status)
+    private static string CriarAssunto(NotificacaoStatusOrdemServico notificacao)
     {
-        var prefixo = ordemServico.Id.ToString()[..8].ToUpperInvariant();
-        var descricaoStatus = status.ObterDescricao();
+        var prefixo = notificacao.OrdemServicoId.ToString()[..8].ToUpperInvariant();
+        var descricaoStatus = notificacao.StatusNovo.ObterDescricao();
         return $"Ordem de Serviço {prefixo} - Status: {descricaoStatus}";
     }
 
-    private static string CriarHtml(OrdemServico ordemServico, StatusOrdemServico status)
+    private static string CriarHtml(NotificacaoStatusOrdemServico notificacao)
     {
         var builder = new StringBuilder();
         var cultura = new CultureInfo("pt-BR");
-        var descricaoStatus = status.ObterDescricao();
+        var descricaoStatus = notificacao.StatusNovo.ObterDescricao();
 
         builder.Append("<h1>Atualização de Status - Ordem de Serviço</h1>");
-        builder.Append($"<p><strong>Ordem de Serviço:</strong> {ordemServico.Id}</p>");
-        builder.Append($"<p><strong>Cliente:</strong> {ordemServico.ClienteId}</p>");
-        builder.Append($"<p><strong>Veículo:</strong> {ordemServico.VeiculoId}</p>");
+        builder.Append($"<p><strong>Ordem de Serviço:</strong> {notificacao.OrdemServicoId}</p>");
+        builder.Append($"<p><strong>Cliente:</strong> {notificacao.ClienteId}</p>");
+        builder.Append($"<p><strong>Veículo:</strong> {notificacao.VeiculoId}</p>");
         builder.Append($"<p><strong>Novo Status:</strong> <span style='color: #0066cc; font-weight: bold;'>{descricaoStatus}</span></p>");
 
-        AppendDetalhesDoStatus(builder, status, ordemServico, cultura);
+        AppendDetalhesDoStatus(builder, notificacao.StatusNovo);
 
-        if (ordemServico.Orcamento is not null)
+        if (notificacao.ValorOrcamento.HasValue)
         {
             builder.Append("<h2>Informações do Orçamento</h2>");
-            builder.Append($"<p><strong>Valor Total:</strong> {ordemServico.Orcamento.ValorTotal.ToString("C", cultura)}</p>");
+            builder.Append($"<p><strong>Valor Total:</strong> {notificacao.ValorOrcamento.Value.ToString("C", cultura)}</p>");
         }
 
         builder.Append("<h2>Serviços da Ordem</h2>");
         builder.Append("<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse;'>");
-        builder.Append("<thead><tr><th>Serviço</th><th>Quantidade de Itens</th></tr></thead>");
+        builder.Append("<thead><tr><th>Serviço</th></tr></thead>");
         builder.Append("<tbody>");
 
-        foreach (var servico in ordemServico.Servicos)
+        foreach (var servico in notificacao.Servicos)
         {
             builder.Append("<tr>");
-            builder.Append($"<td>{servico.Nome} ({servico.Id})</td>");
-            builder.Append($"<td>{servico.ItensServico.Count}</td>");
+            builder.Append($"<td>{servico}</td>");
             builder.Append("</tr>");
         }
 
@@ -97,7 +92,7 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
         return builder.ToString();
     }
 
-    private static void AppendDetalhesDoStatus(StringBuilder builder, StatusOrdemServico status, OrdemServico ordemServico, CultureInfo cultura)
+    private static void AppendDetalhesDoStatus(StringBuilder builder, StatusOrdemServico status)
     {
         builder.Append("<h2>Detalhes da Transição</h2>");
 
@@ -132,6 +127,11 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
             case StatusOrdemServico.Encerrada:
                 builder.Append("<p>Sua ordem de serviço foi <strong>encerrada</strong>.</p>");
                 builder.Append("<p>A OS foi finalizada e registrada em nossos arquivos.</p>");
+                break;
+
+            case StatusOrdemServico.Cancelada:
+                builder.Append("<p>Sua ordem de serviço foi <strong>cancelada</strong>.</p>");
+                builder.Append("<p>Em caso de dúvidas, entre em contato conosco.</p>");
                 break;
 
             case StatusOrdemServico.Recebida:
