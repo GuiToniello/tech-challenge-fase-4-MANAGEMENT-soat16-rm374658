@@ -1,9 +1,9 @@
 # ADR-014: Observabilidade com Datadog
 
-**Status**: Aceita (atualizada na fase 4: dois serviços, `management-api` e `os-service-api`, ver [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) e [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md))
+**Status**: Aceita (atualizada na fase 4: três serviços, `management-api`, `os-service-api` e `billing-api`, ver [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md), [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md) e [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md))
 
 **Contexto**:
-O sistema da oficina tinha, quando esta decisão foi tomada, uma API .NET 10 no Amazon EKS, a Management API. Ela fica atrás de um Amazon API Gateway com Lambda authorizer e usa o Amazon RDS PostgreSQL e o envio de e-mail via Resend. Na fase 4, entrou uma segunda API, o OS Service (repo OS-SERVICE, namespace `os-service`), que segue o mesmo contrato de logs e usa o mesmo Datadog. Até esta decisão, não havia observabilidade:
+O sistema da oficina tinha, quando esta decisão foi tomada, uma API .NET 10 no Amazon EKS, a Management API. Ela fica atrás de um Amazon API Gateway com Lambda authorizer e usa o Amazon RDS PostgreSQL e o envio de e-mail via Resend. Na fase 4, entraram mais duas APIs, o OS Service (repo OS-SERVICE, namespace `os-service`) e o Billing (repo BILLING, namespace `billing`), que seguem o mesmo contrato de logs e usam o mesmo Datadog. Até esta decisão, não havia observabilidade:
 - o único log era um `LogError` em texto no middleware global (ADR-013);
 - não havia traces, métricas de negócio, monitores nem dashboards;
 - o `/health` não verificava o banco.
@@ -29,11 +29,11 @@ Adotar o **Datadog** para logs, traces (APM), métricas, monitores, testes sint�
 1. **Agent no cluster**
    - Helm chart `datadog/datadog` 3.255.0 via `helm_release`, no mesmo padrão do Metrics Server: 1 Agent por nó (DaemonSet) e 1 Cluster Agent.
    - Operator e system-probe desligados, requests fixos e PriorityClass, para caber no cluster.
-   - Coleta o stdout dos containers (exceto `kube-system` e `datadog`) e as métricas de pods e nós, e roda o `http_check` no `/health/ready` de cada API: `http://management-api.oficina.svc.cluster.local/health/ready` e, desde a fase 4, `http://os-service-api.os-service.svc.cluster.local/health/ready`.
+   - Coleta o stdout dos containers (exceto `kube-system` e `datadog`) e as métricas de pods e nós, e roda o `http_check` no `/health/ready` de cada API: `http://management-api.oficina.svc.cluster.local/health/ready` e, desde a fase 4, `http://os-service-api.os-service.svc.cluster.local/health/ready` e `http://billing-api.billing.svc.cluster.local/health/ready`.
 
 2. **APM sem mudar a imagem**
-   - Single Step Instrumentation restrita aos namespaces `oficina` (Management API) e `os-service` (OS Service, desde a fase 4): o admission controller injeta o tracer .NET (v3) nos pods, sem mudança em Dockerfile ou código.
-   - O Deployment de cada API recebe as labels `tags.datadoghq.com/env` (`study`) e `tags.datadoghq.com/service` (`management-api`, neste monorepo, e `os-service-api`, no repo OS-SERVICE). Com elas, logs, traces e métricas saem com as mesmas tags `env` e `service`.
+   - Single Step Instrumentation restrita aos namespaces `oficina` (Management API), `os-service` (OS Service) e `billing` (Billing), os dois últimos desde a fase 4: o admission controller injeta o tracer .NET (v3) nos pods, sem mudança em Dockerfile ou código.
+   - O Deployment de cada API recebe as labels `tags.datadoghq.com/env` (`study`) e `tags.datadoghq.com/service` (`management-api`, neste monorepo, `os-service-api`, no repo OS-SERVICE, e `billing-api`, no repo BILLING). Com elas, logs, traces e métricas saem com as mesmas tags `env` e `service`.
    - `DD_LOGS_INJECTION` ligado: o tracer grava `dd_trace_id` e `dd_span_id` em cada log emitido durante uma requisição. As requisições `GET /health*` ficam fora do APM.
 
 3. **Logs estruturados na API**
@@ -43,9 +43,9 @@ Adotar o **Datadog** para logs, traces (APM), métricas, monitores, testes sint�
    - O nível de log fica na seção `Serilog` do `appsettings.json` (variáveis `Serilog__*` no `docker-compose.yml` e no ConfigMap da API em `kubernetes/k8s`).
 
 4. **Eventos de negócio**
-   - Catálogo de `EventId` em `OrdemServicoLogEventos.cs` (projeto UseCases): `os.criada`, `os.status_alterado`, `os.encerrada`, `os.orcamento_gerado`, `os.orcamento_enviado`, `os.falha` e `integracao.falha`. O middleware global emite `http.erro_nao_tratado`, e o `Program.cs` da API, que aplica as migrations, emite `app.migracao_falhou`.
+   - Catálogo de `EventId` em `OrdemServicoLogEventos.cs` (projeto UseCases): os eventos da OS (`os.criada`, `os.status_alterado` e `os.encerrada`), os do orçamento, `os.falha` e `integracao.falha`. O middleware global emite `http.erro_nao_tratado`, e o `Program.cs` da API, que aplica as migrations, emite `app.migracao_falhou`.
    - Os eventos de OS saem dos use cases e dos controllers, via `ILogger<T>`. OS encerrada é a OS entregue (status `Entregue`).
-   - Na fase 4, cada serviço tem a própria cópia do catálogo, com os mesmos nomes e valores. `os.criada`, `os.status_alterado` e `os.encerrada` passaram a sair do `os-service-api`. A Management continua com `os.orcamento_gerado`, `os.orcamento_enviado`, os `os.falha` do orçamento e da validação da OS e o `integracao.falha`. Os dois serviços registram a troca de eventos no SQS: `evento.publicado` (4001), `evento.consumido` (4002), `evento.ignorado` (4003) e `integracao.falha` com `Integracao=sqs` ([ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)).
+   - Na fase 4, cada serviço tem a própria cópia do catálogo, com os mesmos nomes e valores. `os.criada`, `os.status_alterado` e `os.encerrada` passaram a sair do `os-service-api`. Com a entrada do Billing, `os.orcamento_gerado`, `os.orcamento_enviado` e os `os.falha` do orçamento saíram da Management e passaram a sair do `billing-api`, que também registra o pagamento ([observabilidade do Billing](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/observabilidade.md)). A Management ficou com os `os.falha` da validação da OS e do débito de estoque e o `integracao.falha`. Os três serviços registram a troca de eventos no SQS: `evento.publicado` (4001, um por fila de destino), `evento.consumido` (4002), `evento.ignorado` (4003) e `integracao.falha` com `Integracao=sqs` ([ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)).
    - O catálogo, as propriedades e os valores permitidos são o contrato com o Terraform de `kubernetes/infra/addons` e estão em [docs/observabilidade.md](../observabilidade.md).
 
 5. **Métricas de negócio derivadas dos logs**
@@ -55,7 +55,7 @@ Adotar o **Datadog** para logs, traces (APM), métricas, monitores, testes sint�
 6. **Health checks e uptime**
    - Novo `/health/ready`, anônimo, com check do banco (`AddDbContextCheck`, tag `ready`), consultado só pelo `http_check` do Agent.
    - O `/health` não muda: continua sem depender do banco e segue usado pelas probes do Kubernetes, pelo NLB, pelo API Gateway e pelo `HEALTHCHECK` do Dockerfile. O `readinessProbe` também não muda.
-   - Uptime externo: 1 teste Synthetics por API pelo API Gateway (`GET /management/health` e, desde a fase 4, `GET /os/health`) e 1 SLO de 99% em 7 dias sobre os testes.
+   - Uptime externo: 1 teste Synthetics por API pelo API Gateway (`GET /management/health` e, desde a fase 4, `GET /os/health` e `GET /billing/health`) e 1 SLO de 99% em 7 dias sobre os testes.
 
 7. **Monitores e dashboard**
    - 10 monitores: latência p95 (R1); CPU e memória acima do limit, CrashLoopBackOff, restarts e nós prontos (R2); réplicas indisponíveis e `http.can_connect` (R3); 5xx por rota e erros de integração (R4).
@@ -74,12 +74,12 @@ Adotar o **Datadog** para logs, traces (APM), métricas, monitores, testes sint�
 - ✅ A infraestrutura do Datadog é código, criada e destruída com o ambiente pelos jobs do `kubernetes/infra/addons` no Bootstrap, no Deploy e no Destroy, sem job próprio.
 - ✅ Liga/desliga por `DD_ENABLED`, sem mudar código: serve para o fim do trial ou para um problema na conta.
 - ⚠ **Trial de 14 dias**: custo zero e sem cartão, com APM, logs e synthetics liberados. Os 14 dias contam do cadastro, então a conta só deve ser criada quando o ambiente subir para a demonstração. Depois, a organização cai no plano Free: só infraestrutura (até 5 hosts, retenção de 1 dia), **sem APM, logs e synthetics**, e os widgets de negócio (métricas de log) param de atualizar. Antes de o trial acabar, desligar com `DD_ENABLED=false` + Bootstrap, que já termina com o K8s Apply com restart (ou rodar o Destroy); passo a passo no [kubernetes/infra/DATADOG.md](../../kubernetes/infra/DATADOG.md). O plano pago custaria cerca de US$ 110–150/mês: nunca cadastrar cartão.
-- ⚠ **Capacidade**: o Datadog soma 3 pods (2 agents e 1 cluster-agent) e cerca de 0,9 GiB de requests de memória. Com a API em 1 réplica, o cluster passa de 8 para 11 pods, de 22 possíveis (pico de 12 no rollout restart da API), com cerca de 1,4 GiB de requests de memória em regime (1,5 GiB no restart) contra ~2,9 GiB alocáveis. Cabe. Com o OS Service (fase 4), são 12 pods e cerca de 1,5 GiB em regime ([ADR-016](ADR-016-Escalabilidade-com-HPA.md)). A contingência (`t3.medium`) substitui o node group, o que é disruptivo.
+- ⚠ **Capacidade**: o Datadog soma 3 pods (2 agents e 1 cluster-agent) e cerca de 0,9 GiB de requests de memória. Com a API em 1 réplica, o cluster passa de 8 para 11 pods, de 22 possíveis (pico de 12 no rollout restart da API), com cerca de 1,4 GiB de requests de memória em regime (1,5 GiB no restart) contra ~2,9 GiB alocáveis. Cabe. Com o OS Service e o Billing (fase 4), são 13 pods e cerca de 1,6 GiB em regime ([ADR-016](ADR-016-Escalabilidade-com-HPA.md)). A contingência (`t3.medium`) substitui o node group, o que é disruptivo.
 - ⚠ **HPA**: com o tracer, a memória da API passaria dos ~102Mi (80% de 128Mi) e o HPA escalaria até faltar pod. O alvo de memória do HPA sobe de 80% para 150%, com o mesmo request. Validar depois do deploy e, se ainda escalar à toa, deixar só CPU.
 - ⚠ **Segurança das chaves**: API Key e Application Key ficam nos GitHub Secrets do monorepo (`DD_API_KEY` e `DD_APP_KEY`) e chegam ao Terraform como variáveis sensíveis. A API Key vai ao chart por `set_sensitive`, que a esconde do plan, mas fica gravada no state do `kubernetes/infra/addons` (bucket S3 com criptografia e sem acesso público) e num Secret do namespace `datadog`. A Application Key é **não-escopada** (tem as permissões do usuário que a criou), porque é a credencial do provider Terraform. Revogar as duas ao fim do estudo. `DD_ALERT_RECIPIENTS` também é secret, porque o repo é público e o plan imprime as mensagens dos monitores.
 - ⚠ **Dados pessoais (PII)**: os logs só levam GUIDs e valores fixos. CPF/CNPJ, e-mail, nome, placa e JWT nunca são logados. O `Motivo` de `os.falha` é a mensagem da exceção de domínio, que não traz dados pessoais. Os ids (`OrdemServicoId`, `ClienteId`, `VeiculoId`) são atributos de log, nunca tags de métrica. Cada novo ponto de log precisa seguir essa regra, conferida na revisão de código.
 - ⚠ **Chaves inválidas ou trial vencido**: o plan, o apply e o destroy do `kubernetes/infra/addons` falham. O destroy da foundation roda mesmo assim, para o EKS não ficar ligado cobrando. A recuperação (renovar as chaves, `DD_ENABLED=false` ou `terraform state rm`) está no [kubernetes/infra/DATADOG.md](../../kubernetes/infra/DATADOG.md).
-- ⚠ **Sem transação no débito de estoque**: limitação pré-existente (ADR-012), fora do escopo. A aprovação agora valida o status antes de verificar e debitar o estoque, mas o débito ainda grava insumo por insumo. Uma falha no meio (estoque consumido por outra OS ou banco indisponível) deixa parte dos insumos debitada e o orçamento sem aprovação. O caso fica visível (`os.falha` ou `http.erro_nao_tratado`), mas não é corrigido por esta decisão.
+- ✅ **Débito de estoque observável e sem débito parcial**: desde a entrada do Billing, o débito acontece no consumo do `PagamentoAprovado`, confere todos os insumos antes de gravar e grava os insumos e a marca `estoque_debitado` numa única transação (ADR-012). Falta de estoque gera `os.falha` (etapa `estoque_debito`); uma falha do banco no meio desfaz tudo e aparece como `integracao.falha` do consumo, com a mensagem voltando para a fila.
 - ⚠ **Métricas de log sem backfill**: só contam os eventos ingeridos depois que a métrica existe.
 
 **Limitações**:
@@ -87,8 +87,8 @@ Adotar o **Datadog** para logs, traces (APM), métricas, monitores, testes sint�
 - **Synthetic fora do authorizer**: `GET /management/health` é uma rota pública do API Gateway, que não passa pelo Lambda authorizer. O teste mede a disponibilidade da API pelo API Gateway, não a do authorizer nem a do Auth0.
 - **Sem versão**: as imagens usam `:latest` e não há `DD_VERSION`, então `dd.version` não aparece e o APM não compara versões.
 - **Sem pipeline de logs nem facets customizados**: as chaves do JSON já são reconhecidas pelo Datadog, e as métricas e os monitores filtram por atributos, que não precisam de facet.
-- **Kubernetes só no namespace `oficina`** (fase 4): os monitores e widgets de CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis continuam filtrando o namespace `oficina`. Os pods do OS Service (namespace `os-service`) aparecem no APM, nos logs, no `http.can_connect` e no synthetic, mas não nesses monitores.
-- **Entre os serviços, a correlação é pelos logs** (fase 4): os passos da saga ficam ligados pelo `OrdemServicoId` e pelo id do evento nos logs dos dois serviços (`evento.*`), e não por um trace único.
+- **Kubernetes só no namespace `oficina`** (fase 4): os monitores e widgets de CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis continuam filtrando o namespace `oficina`. Os pods do OS Service (namespace `os-service`) e do Billing (namespace `billing`) aparecem no APM, nos logs, no `http.can_connect` e no synthetic, mas não nesses monitores.
+- **Entre os serviços, a correlação é pelos logs** (fase 4): os passos da saga ficam ligados pelo `OrdemServicoId` e pelo id do evento nos logs dos três serviços (`evento.*`), e não por um trace único.
 
 **Alternativas Rejeitadas**:
 - Datadog Operator:

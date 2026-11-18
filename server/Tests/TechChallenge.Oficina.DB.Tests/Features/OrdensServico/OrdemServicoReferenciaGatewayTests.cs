@@ -54,6 +54,29 @@ public sealed class OrdemServicoReferenciaGatewayTests
 
         Assert.Equal([novoServicoId], salva!.ServicoIds);
         Assert.Equal(StatusOrdemServico.EmDiagnostico, salva.Status);
+        Assert.False(salva.EstoqueDebitado);
+    }
+
+    [Fact]
+    public async Task AtualizarAsync_DevePersistirDebitoDeEstoque()
+    {
+        var nomeBanco = Guid.NewGuid().ToString();
+        var referencia = OrdemServicoReferencia.Criar(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()]);
+
+        await using (var context = CriarContexto(nomeBanco))
+        {
+            var gateway = new OrdemServicoReferenciaGateway(context);
+            await gateway.AdicionarAsync(referencia);
+
+            var carregada = await gateway.ObterPorIdAsync(referencia.Id);
+            carregada!.RegistrarDebitoEstoque();
+            await gateway.AtualizarAsync(carregada);
+        }
+
+        await using var novoContexto = CriarContexto(nomeBanco);
+        var salva = await new OrdemServicoReferenciaGateway(novoContexto).ObterPorIdAsync(referencia.Id);
+
+        Assert.True(salva!.EstoqueDebitado);
     }
 
     [Fact]
@@ -77,6 +100,33 @@ public sealed class OrdemServicoReferenciaGatewayTests
         await gateway.RemoverAsync(referencia);
 
         Assert.Empty(await context.OrdensServicoReferencias.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ExecutarEmTransacaoAsync_DeveExecutarOperacaoEGravar_QuandoProvedorNaoRelacional()
+    {
+        var nomeBanco = Guid.NewGuid().ToString();
+        var referencia = OrdemServicoReferencia.Criar(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()]);
+
+        await using (var context = CriarContexto(nomeBanco))
+        {
+            var gateway = new OrdemServicoReferenciaGateway(context);
+            await gateway.ExecutarEmTransacaoAsync(() => gateway.AdicionarAsync(referencia));
+        }
+
+        await using var novoContexto = CriarContexto(nomeBanco);
+        Assert.NotNull(await new OrdemServicoReferenciaGateway(novoContexto).ObterPorIdAsync(referencia.Id));
+    }
+
+    [Fact]
+    public async Task ExecutarEmTransacaoAsync_DevePropagarExcecaoDaOperacao()
+    {
+        await using var context = CriarContexto(Guid.NewGuid().ToString());
+        var gateway = new OrdemServicoReferenciaGateway(context);
+
+        var action = () => gateway.ExecutarEmTransacaoAsync(() => throw new InvalidOperationException("Falha no meio da operacao."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
     }
 
     private static OficinaDbContext CriarContexto(string nomeBanco)

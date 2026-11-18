@@ -4,6 +4,6 @@ namespace TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 
 public interface IEstoqueUseCases
 {
-    Task VerificarDisponibilidadeParaOrcamentoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default);
+    Task<bool> PossuiDisponibilidadeAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default);
     Task DebitarEstoqueParaOrdemServicoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default);
 }

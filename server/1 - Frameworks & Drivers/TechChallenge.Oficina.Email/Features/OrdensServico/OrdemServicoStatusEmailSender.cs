@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using Resend;
 using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
@@ -57,7 +56,6 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
     private static string CriarHtml(NotificacaoStatusOrdemServico notificacao)
     {
         var builder = new StringBuilder();
-        var cultura = new CultureInfo("pt-BR");
         var descricaoStatus = notificacao.StatusNovo.ObterDescricao();
 
         builder.Append("<h1>Atualização de Status - Ordem de Serviço</h1>");
@@ -67,12 +65,6 @@ public sealed class OrdemServicoStatusEmailSender : IOrdemServicoStatusEmailSend
         builder.Append($"<p><strong>Novo Status:</strong> <span style='color: #0066cc; font-weight: bold;'>{descricaoStatus}</span></p>");
 
         AppendDetalhesDoStatus(builder, notificacao.StatusNovo);
-
-        if (notificacao.ValorOrcamento.HasValue)
-        {
-            builder.Append("<h2>Informações do Orçamento</h2>");
-            builder.Append($"<p><strong>Valor Total:</strong> {notificacao.ValorOrcamento.Value.ToString("C", cultura)}</p>");
-        }
 
         builder.Append("<h2>Serviços da Ordem</h2>");
         builder.Append("<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse;'>");

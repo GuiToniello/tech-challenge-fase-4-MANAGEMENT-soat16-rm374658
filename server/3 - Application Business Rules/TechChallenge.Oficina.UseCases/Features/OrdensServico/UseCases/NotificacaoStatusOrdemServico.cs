@@ -9,6 +9,5 @@ public sealed class NotificacaoStatusOrdemServico
     public Guid ClienteId { get; set; }
     public Guid VeiculoId { get; set; }
     public StatusOrdemServico StatusNovo { get; set; }
-    public decimal? ValorOrcamento { get; set; }
     public IReadOnlyCollection<string> Servicos { get; set; } = [];
 }

@@ -2,12 +2,10 @@
 using TechChallenge.Oficina.Management.API.Extensions;
 using TechChallenge.Oficina.Management.API.Features.Clientes;
 using TechChallenge.Oficina.Management.API.Features.Insumos;
-using TechChallenge.Oficina.Management.API.Features.Orcamentos;
 using TechChallenge.Oficina.Management.API.Features.Servicos;
 using TechChallenge.Oficina.Management.API.Features.Veiculos;
 using TechChallenge.Oficina.Adapters.Features.Clientes;
 using TechChallenge.Oficina.Adapters.Features.Insumos;
-using TechChallenge.Oficina.Adapters.Features.Orcamentos;
 using TechChallenge.Oficina.Adapters.Features.Servicos;
 using TechChallenge.Oficina.Adapters.Features.Veiculos;
 using TechChallenge.Oficina.Management.API.Middleware;
@@ -15,7 +13,6 @@ using TechChallenge.Oficina.Management.API.Settings;
 using TechChallenge.Oficina.Controllers.Features.Clientes;
 using TechChallenge.Oficina.Controllers.Features.Eventos;
 using TechChallenge.Oficina.Controllers.Features.Insumos;
-using TechChallenge.Oficina.Controllers.Features.Orcamentos;
 using TechChallenge.Oficina.Controllers.Features.Servicos;
 using TechChallenge.Oficina.Controllers.Features.Veiculos;
 using TechChallenge.Oficina.DB.Data;
@@ -26,8 +23,6 @@ using TechChallenge.Oficina.Messaging.Configuration;
 using TechChallenge.Oficina.UseCases.Features.Clientes.Mappings;
 using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
-using TechChallenge.Oficina.UseCases.Features.Orcamentos.Mappings;
-using TechChallenge.Oficina.UseCases.Features.Orcamentos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Servicos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Veiculos.UseCases;
@@ -50,12 +45,10 @@ if (string.IsNullOrWhiteSpace(databaseSettings.ConnectionString))
     throw new InvalidOperationException("A connection string do banco de dados é obrigatória.");
 }
 
-builder.Services.AddAutoMapper(_ => { }, typeof(ClienteProfile).Assembly, typeof(OrcamentoProfile).Assembly);
+builder.Services.AddAutoMapper(_ => { }, typeof(ClienteProfile).Assembly);
 builder.Services.AddScoped<IClienteUseCases, ClienteUseCases>();
 builder.Services.AddScoped<IInsumoUseCases, InsumoUseCases>();
 builder.Services.AddScoped<IEstoqueUseCases, EstoqueUseCases>();
-builder.Services.AddScoped<IOrcamentoUseCasesFacade, OrcamentoUseCasesFacade>();
-builder.Services.AddScoped<IOrcamentoUseCases, OrcamentoUseCases>();
 builder.Services.AddScoped<IOrdemServicoReferenciaUseCasesFacade, OrdemServicoReferenciaUseCasesFacade>();
 builder.Services.AddScoped<IOrdemServicoReferenciaUseCases, OrdemServicoReferenciaUseCases>();
 builder.Services.AddScoped<IServicoUseCases, ServicoUseCases>();
@@ -68,15 +61,15 @@ var resendSettings = builder.Configuration
     ?? new ResendSettings();
 builder.Services.AddInfraEmail(resendSettings);
 
-// Integracao com o OS Service por eventos (Amazon SQS); credenciais e regiao pela cadeia padrao do AWS SDK
+// Integracao com o OS Service e o Billing por eventos (Amazon SQS); credenciais e regiao pela cadeia padrao do AWS SDK
 var sqsSettings = builder.Configuration
     .GetSection(SqsSettings.SectionName)
     .Get<SqsSettings>()
     ?? new SqsSettings();
 
-if (string.IsNullOrWhiteSpace(sqsSettings.FilaPublicacao))
+if (sqsSettings.FilasPublicacao.Count == 0 || sqsSettings.FilasPublicacao.Any(string.IsNullOrWhiteSpace))
 {
-    throw new InvalidOperationException("A fila de publicação do SQS (SqsSettings:FilaPublicacao) é obrigatória.");
+    throw new InvalidOperationException("Ao menos uma fila de publicação do SQS (SqsSettings:FilasPublicacao) é obrigatória, e nenhuma pode ser vazia.");
 }
 
 builder.Services.AddInfraMessaging(sqsSettings);
@@ -85,8 +78,6 @@ builder.Services.AddScoped<IClienteAdapter, ClienteAdapter>();
 builder.Services.AddScoped<IClienteController, ClienteController>();
 builder.Services.AddScoped<IServicoController, ServicoController>();
 builder.Services.AddScoped<IServicoAdapter, ServicoAdapter>();
-builder.Services.AddScoped<IOrcamentosController, OrcamentosController>();
-builder.Services.AddScoped<IOrcamentosAdapter, OrcamentosAdapter>();
 builder.Services.AddScoped<IVeiculoController, VeiculoController>();
 builder.Services.AddScoped<IVeiculoAdapter, VeiculoAdapter>();
 builder.Services.AddScoped<IInsumoController, InsumoController>();
@@ -120,6 +111,5 @@ app.MapClienteEndpoints();
 app.MapInsumoEndpoints();
 app.MapVeiculoEndpoints();
 app.MapServicoEndpoints();
-app.MapOrcamentoEndpoints();
 
 await app.RunAsync();

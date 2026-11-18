@@ -4,7 +4,7 @@ using Moq;
 using TechChallenge.Oficina.Entities.Exceptions;
 using TechChallenge.Oficina.Entities.Features.Clientes;
 using TechChallenge.Oficina.Entities.Features.Clientes.VOs;
-using TechChallenge.Oficina.Entities.Features.Orcamentos;
+using TechChallenge.Oficina.Entities.Features.Insumos;
 using TechChallenge.Oficina.Entities.Features.OrdensServico;
 using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Entities.Features.Servicos;
@@ -13,7 +13,7 @@ using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Eventos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Interfaces;
-using TechChallenge.Oficina.UseCases.Features.Orcamentos.UseCases;
+using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Commands;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Logging;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
@@ -26,22 +26,37 @@ namespace TechChallenge.Oficina.UseCases.Tests.Features.OrdensServico.UseCases;
 public sealed class OrdemServicoReferenciaUseCasesTests
 {
     private readonly Mock<IOrdemServicoReferenciaGateway> _referenciaGatewayMock = new();
-    private readonly Mock<IOrcamentoGateway> _orcamentoGatewayMock = new();
     private readonly Mock<IClienteGateway> _clienteGatewayMock = new();
     private readonly Mock<IVeiculoGateway> _veiculoGatewayMock = new();
     private readonly Mock<IServicoGateway> _servicoGatewayMock = new();
+    private readonly Mock<IEstoqueUseCases> _estoqueUseCasesMock = new();
     private readonly Mock<IEventosPublisher> _eventosPublisherMock = new();
     private readonly Mock<IOrdemServicoStatusEmailSender> _statusEmailSenderMock = new();
     private readonly Mock<IOrdemServicoReferenciaUseCasesFacade> _facadeMock = new();
+    private bool _emTransacao;
 
     private OrdemServicoReferenciaUseCases CriarUseCases(ILogger<OrdemServicoReferenciaUseCases>? logger = null)
     {
+        _facadeMock.SetupGet(f => f.EstoqueUseCases).Returns(_estoqueUseCasesMock.Object);
         _facadeMock.SetupGet(f => f.EventosPublisher).Returns(_eventosPublisherMock.Object);
         _facadeMock.SetupGet(f => f.OrdemServicoStatusEmailSender).Returns(_statusEmailSenderMock.Object);
+        _referenciaGatewayMock
+            .Setup(g => g.ExecutarEmTransacaoAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
+            .Returns<Func<Task>, CancellationToken>(async (operacao, _) =>
+            {
+                _emTransacao = true;
+                try
+                {
+                    await operacao();
+                }
+                finally
+                {
+                    _emTransacao = false;
+                }
+            });
 
         return new OrdemServicoReferenciaUseCases(
             _referenciaGatewayMock.Object,
-            _orcamentoGatewayMock.Object,
             _clienteGatewayMock.Object,
             _veiculoGatewayMock.Object,
             _servicoGatewayMock.Object,
@@ -71,16 +86,22 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         return veiculo;
     }
 
-    private Servico CriarServico(string nome = "Revisao")
+    private Servico CriarServico(string nome = "Revisao", params (int Quantidade, decimal ValorUnitario)[] itens)
     {
-        var servico = Servico.Criar(nome, "Servico completo", []);
+        var itensServico = itens
+            .Select((item, indice) => ItemServico.Criar(Insumo.Criar($"Insumo {indice + 1}", "Fabricante", 10, item.ValorUnitario), item.Quantidade))
+            .ToArray();
+        var servico = Servico.Criar(nome, "Servico completo", itensServico);
         _servicoGatewayMock.Setup(g => g.ObterPorIdAsync(servico.Id, It.IsAny<CancellationToken>())).ReturnsAsync(servico);
         return servico;
     }
 
     private OrdemServicoReferencia CriarReferenciaExistente(Guid clienteId, Guid veiculoId, Guid servicoId, StatusOrdemServico status = StatusOrdemServico.Recebida)
+        => CriarReferenciaExistente(clienteId, veiculoId, [servicoId], status);
+
+    private OrdemServicoReferencia CriarReferenciaExistente(Guid clienteId, Guid veiculoId, IReadOnlyCollection<Guid> servicoIds, StatusOrdemServico status = StatusOrdemServico.Recebida)
     {
-        var referencia = OrdemServicoReferencia.Criar(Guid.NewGuid(), clienteId, veiculoId, [servicoId]);
+        var referencia = OrdemServicoReferencia.Criar(Guid.NewGuid(), clienteId, veiculoId, servicoIds);
         referencia.AtualizarStatus(status);
         _referenciaGatewayMock.Setup(g => g.ObterPorIdAsync(referencia.Id, It.IsAny<CancellationToken>())).ReturnsAsync(referencia);
         return referencia;
@@ -89,9 +110,29 @@ public sealed class OrdemServicoReferenciaUseCasesTests
     private static OrdemServicoStatusAlterado CriarStatusAlterado(OrdemServicoReferencia referencia, StatusOrdemServico statusNovo)
         => new(referencia.Id, referencia.ClienteId, (int)referencia.Status, (int)statusNovo);
 
+    private void ConfigurarEstoqueSuficiente(bool estoqueSuficiente)
+    {
+        _estoqueUseCasesMock
+            .Setup(e => e.PossuiDisponibilidadeAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(estoqueSuficiente);
+    }
+
+    private Func<OrdemServicoValidada> CapturarValidacaoPublicada()
+    {
+        OrdemServicoValidada? eventoPublicado = null;
+
+        _eventosPublisherMock
+            .Setup(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback<OrdemServicoValidada, Guid, CancellationToken>((evento, _, _) => eventoPublicado = evento)
+            .Returns(Task.CompletedTask);
+
+        return () => eventoPublicado ?? throw new InvalidOperationException("Nenhum evento OrdemServicoValidada foi publicado.");
+    }
+
     private void VerificarRejeicaoPublicada(Guid ordemServicoId, string motivo)
     {
         _eventosPublisherMock.Verify(p => p.PublicarAsync(new OrdemServicoRejeitada(ordemServicoId, motivo), ordemServicoId, It.IsAny<CancellationToken>()), Times.Once);
+        _eventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         _referenciaGatewayMock.Verify(g => g.AdicionarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
         _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -109,20 +150,74 @@ public sealed class OrdemServicoReferenciaUseCasesTests
 
         Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
         _referenciaGatewayMock.Verify(g => g.AdicionarAsync(
-            It.Is<OrdemServicoReferencia>(r => r.Id == command.OrdemServicoId && r.ClienteId == cliente.Id && r.VeiculoId == veiculo.Id && r.Status == StatusOrdemServico.Recebida && r.ServicoIds.Single() == servico.Id),
+            It.Is<OrdemServicoReferencia>(r => r.Id == command.OrdemServicoId && r.ClienteId == cliente.Id && r.VeiculoId == veiculo.Id && r.Status == StatusOrdemServico.Recebida && r.ServicoIds.Single() == servico.Id && !r.EstoqueDebitado),
             It.IsAny<CancellationToken>()), Times.Once);
+        _eventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), command.OrdemServicoId, It.IsAny<CancellationToken>()), Times.Once);
         _eventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoRejeitada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task RegistrarAsync_DeveAtualizarReferenciaExistenteMantendoStatus_QuandoOrdemAtualizada()
+    public async Task RegistrarAsync_DevePublicarOrdemServicoValidadaComServicosPrecificados_QuandoDadosValidos()
+    {
+        var useCases = CriarUseCases();
+        var cliente = CriarCliente(email: "cliente@teste.com");
+        var veiculo = CriarVeiculo(cliente.Id);
+        var trocaDeOleo = CriarServico("Troca de oleo", (2, 15.50m), (1, 10m));
+        var alinhamento = CriarServico("Alinhamento", (1, 30m));
+        ConfigurarEstoqueSuficiente(true);
+        var eventoPublicado = CapturarValidacaoPublicada();
+        var command = new RegistrarOrdemServicoReferenciaCommand { OrdemServicoId = Guid.NewGuid(), ClienteId = cliente.Id, VeiculoId = veiculo.Id, ServicoIds = [trocaDeOleo.Id, alinhamento.Id, trocaDeOleo.Id] };
+
+        await useCases.RegistrarAsync(command);
+
+        var evento = eventoPublicado();
+        Assert.Equal(command.OrdemServicoId, evento.OrdemServicoId);
+        Assert.Equal(cliente.Id, evento.ClienteId);
+        Assert.Equal(veiculo.Id, evento.VeiculoId);
+        Assert.Equal("cliente@teste.com", evento.ClienteEmail);
+        Assert.True(evento.EstoqueSuficiente);
+        Assert.Equal(
+            [new ServicoValidado(trocaDeOleo.Id, "Troca de oleo", 41m), new ServicoValidado(alinhamento.Id, "Alinhamento", 30m)],
+            evento.Servicos);
+        Assert.Equal(71m, evento.ValorTotal);
+        _estoqueUseCasesMock.Verify(e => e.PossuiDisponibilidadeAsync(
+            It.Is<IReadOnlyCollection<Servico>>(servicos => servicos.Count == 2 && servicos.Contains(trocaDeOleo) && servicos.Contains(alinhamento)),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _estoqueUseCasesMock.Verify(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RegistrarAsync_DeveRegistrarEPublicarEstoqueInsuficienteSemEmail_QuandoNaoHaEstoqueEClienteSemEmail()
+    {
+        var useCases = CriarUseCases();
+        var cliente = CriarCliente();
+        var veiculo = CriarVeiculo(cliente.Id);
+        var servico = CriarServico("Troca de pastilha", (2, 50m));
+        ConfigurarEstoqueSuficiente(false);
+        var eventoPublicado = CapturarValidacaoPublicada();
+        var command = new RegistrarOrdemServicoReferenciaCommand { OrdemServicoId = Guid.NewGuid(), ClienteId = cliente.Id, VeiculoId = veiculo.Id, ServicoIds = [servico.Id] };
+
+        var resultado = await useCases.RegistrarAsync(command);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        _referenciaGatewayMock.Verify(g => g.AdicionarAsync(It.Is<OrdemServicoReferencia>(r => r.Id == command.OrdemServicoId), It.IsAny<CancellationToken>()), Times.Once);
+        var evento = eventoPublicado();
+        Assert.False(evento.EstoqueSuficiente);
+        Assert.Null(evento.ClienteEmail);
+        Assert.Equal(100m, evento.ValorTotal);
+        _eventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoRejeitada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RegistrarAsync_DeveAtualizarReferenciaExistenteMantendoStatusEPublicarValidacao_QuandoOrdemAtualizada()
     {
         var useCases = CriarUseCases();
         var cliente = CriarCliente();
         var veiculo = CriarVeiculo(cliente.Id);
         var servicoAtual = CriarServico();
-        var servicoNovo = CriarServico("Alinhamento");
+        var servicoNovo = CriarServico("Alinhamento", (1, 30m));
         var referencia = CriarReferenciaExistente(cliente.Id, veiculo.Id, servicoAtual.Id, StatusOrdemServico.EmDiagnostico);
+        var eventoPublicado = CapturarValidacaoPublicada();
         var command = new RegistrarOrdemServicoReferenciaCommand { OrdemServicoId = referencia.Id, ClienteId = cliente.Id, VeiculoId = veiculo.Id, ServicoIds = [servicoNovo.Id] };
 
         var resultado = await useCases.RegistrarAsync(command);
@@ -132,6 +227,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal([servicoNovo.Id], referencia.ServicoIds);
         _referenciaGatewayMock.Verify(g => g.AtualizarAsync(referencia, It.IsAny<CancellationToken>()), Times.Once);
         _referenciaGatewayMock.Verify(g => g.AdicionarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal([new ServicoValidado(servicoNovo.Id, "Alinhamento", 30m)], eventoPublicado().Servicos);
     }
 
     [Fact]
@@ -244,7 +340,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
 
         var exception = await Assert.ThrowsAsync<DomainException>(action);
         Assert.Equal("O identificador da ordem de servico e obrigatorio.", exception.Message);
-        _eventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoRejeitada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_eventosPublisherMock.Invocations);
     }
 
     [Fact]
@@ -283,8 +379,6 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         var cliente = CriarCliente(email: "cliente@teste.com");
         var servico = CriarServico("Troca de oleo");
         var referencia = CriarReferenciaExistente(cliente.Id, Guid.NewGuid(), servico.Id);
-        var orcamento = Orcamento.Criar(referencia.Id, [servico]);
-        _orcamentoGatewayMock.Setup(g => g.ObterPorIdAsync(referencia.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
         NotificacaoStatusOrdemServico? notificacaoEnviada = null;
         _statusEmailSenderMock
             .Setup(s => s.EnviarStatusAlteradoAsync(It.IsAny<NotificacaoStatusOrdemServico>(), "cliente@teste.com", It.IsAny<CancellationToken>()))
@@ -301,7 +395,6 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal(referencia.ClienteId, notificacaoEnviada.ClienteId);
         Assert.Equal(referencia.VeiculoId, notificacaoEnviada.VeiculoId);
         Assert.Equal(statusNovo, notificacaoEnviada.StatusNovo);
-        Assert.Equal(orcamento.ValorTotal, notificacaoEnviada.ValorOrcamento);
         Assert.Equal(["Troca de oleo"], notificacaoEnviada.Servicos);
     }
 
@@ -413,23 +506,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
     }
 
     [Fact]
-    public async Task RemoverAsync_DeveRemoverReferenciaEOrcamento_QuandoExistem()
-    {
-        var useCases = CriarUseCases();
-        var servico = Servico.Criar("Revisao", "Servico completo", []);
-        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
-        var orcamento = Orcamento.Criar(referencia.Id, [servico]);
-        _orcamentoGatewayMock.Setup(g => g.ObterPorIdAsync(referencia.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
-
-        var resultado = await useCases.RemoverAsync(new OrdemServicoExcluida(referencia.Id));
-
-        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
-        _orcamentoGatewayMock.Verify(g => g.RemoverAsync(orcamento, It.IsAny<CancellationToken>()), Times.Once);
-        _referenciaGatewayMock.Verify(g => g.RemoverAsync(referencia, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task RemoverAsync_DeveRemoverSomenteReferencia_QuandoNaoHaOrcamento()
+    public async Task RemoverAsync_DeveRemoverReferencia_QuandoExiste()
     {
         var useCases = CriarUseCases();
         var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
@@ -438,11 +515,10 @@ public sealed class OrdemServicoReferenciaUseCasesTests
 
         Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
         _referenciaGatewayMock.Verify(g => g.RemoverAsync(referencia, It.IsAny<CancellationToken>()), Times.Once);
-        _orcamentoGatewayMock.Verify(g => g.RemoverAsync(It.IsAny<Orcamento>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task RemoverAsync_DeveRetornarIgnorado_QuandoNadaExiste()
+    public async Task RemoverAsync_DeveRetornarIgnorado_QuandoReferenciaNaoExiste()
     {
         var useCases = CriarUseCases();
 
@@ -450,6 +526,137 @@ public sealed class OrdemServicoReferenciaUseCasesTests
 
         Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
         _referenciaGatewayMock.Verify(g => g.RemoverAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
-        _orcamentoGatewayMock.Verify(g => g.RemoverAsync(It.IsAny<Orcamento>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveDebitarEstoqueERegistrarDebito_QuandoReferenciaExiste()
+    {
+        var useCases = CriarUseCases();
+        var trocaDeOleo = CriarServico("Troca de oleo", (2, 15.50m));
+        var alinhamento = CriarServico("Alinhamento", (1, 30m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), [trocaDeOleo.Id, alinhamento.Id], StatusOrdemServico.AguardandoAprovacao);
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 61m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        Assert.True(referencia.EstoqueDebitado);
+        _estoqueUseCasesMock.Verify(e => e.DebitarEstoqueParaOrdemServicoAsync(
+            It.Is<IReadOnlyCollection<Servico>>(servicos => servicos.Count == 2 && servicos.Contains(trocaDeOleo) && servicos.Contains(alinhamento)),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _referenciaGatewayMock.Verify(g => g.AtualizarAsync(referencia, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(_eventosPublisherMock.Invocations);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveDebitarERegistrarDebitoDentroDaMesmaTransacao()
+    {
+        var useCases = CriarUseCases();
+        var servico = CriarServico("Troca de oleo", (2, 15.50m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
+        var debitoEmTransacao = false;
+        var marcaEmTransacao = false;
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .Callback(() => debitoEmTransacao = _emTransacao)
+            .Returns(Task.CompletedTask);
+        _referenciaGatewayMock
+            .Setup(g => g.AtualizarAsync(referencia, It.IsAny<CancellationToken>()))
+            .Callback(() => marcaEmTransacao = _emTransacao && referencia.EstoqueDebitado)
+            .Returns(Task.CompletedTask);
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        Assert.True(debitoEmTransacao);
+        Assert.True(marcaEmTransacao);
+        _referenciaGatewayMock.Verify(g => g.ExecutarEmTransacaoAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveRetornarIgnorado_QuandoReferenciaNaoExiste()
+    {
+        var useCases = CriarUseCases();
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(Guid.NewGuid(), Guid.NewGuid(), 100m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        Assert.Empty(_estoqueUseCasesMock.Invocations);
+        _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveRetornarIgnoradoSemDebitarNovamente_QuandoEstoqueJaDebitado()
+    {
+        var useCases = CriarUseCases();
+        var servico = CriarServico("Troca de oleo", (2, 15.50m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
+        referencia.RegistrarDebitoEstoque();
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        Assert.Empty(_estoqueUseCasesMock.Invocations);
+        _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveRegistrarFalhaERetornarIgnorado_QuandoEstoqueInsuficiente()
+    {
+        var loggerMock = new Mock<ILogger<OrdemServicoReferenciaUseCases>>();
+        var useCases = CriarUseCases(loggerMock.Object);
+        var servico = CriarServico("Troca de oleo", (2, 15.50m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DomainException("Estoque insuficiente do insumo 'Insumo 1'. Disponivel: 1, Necessario: 2."));
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        Assert.False(referencia.EstoqueDebitado);
+        _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+        var (nivel, propriedades, excecao) = ObterRegistroDeLog(loggerMock, OrdemServicoLogEventos.OsFalha);
+        Assert.Equal(LogLevel.Warning, nivel);
+        Assert.Null(excecao);
+        Assert.Equal("estoque_debito", propriedades["Etapa"]);
+        Assert.Equal("regra_negocio", propriedades["TipoFalha"]);
+        Assert.Equal(referencia.Id, propriedades["OrdemServicoId"]);
+        Assert.Equal("Estoque insuficiente do insumo 'Insumo 1'. Disponivel: 1, Necessario: 2.", propriedades["Motivo"]);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveRegistrarFalhaNaoEncontrado_QuandoServicoDaOrdemNaoExisteMais()
+    {
+        var loggerMock = new Mock<ILogger<OrdemServicoReferenciaUseCases>>();
+        var useCases = CriarUseCases(loggerMock.Object);
+        var servicoRemovidoId = Guid.NewGuid();
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servicoRemovidoId);
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        Assert.False(referencia.EstoqueDebitado);
+        Assert.Empty(_estoqueUseCasesMock.Invocations);
+        var (_, propriedades, _) = ObterRegistroDeLog(loggerMock, OrdemServicoLogEventos.OsFalha);
+        Assert.Equal("estoque_debito", propriedades["Etapa"]);
+        Assert.Equal("nao_encontrado", propriedades["TipoFalha"]);
+        Assert.Equal($"Servico com ID '{servicoRemovidoId}' nao encontrado.", propriedades["Motivo"]);
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DevePropagarExcecao_QuandoFalhaNaoForDeRegraDeNegocio()
+    {
+        var useCases = CriarUseCases();
+        var servico = CriarServico("Troca de oleo", (2, 15.50m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Banco indisponivel."));
+
+        var action = async () => await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
+        Assert.False(referencia.EstoqueDebitado);
+        _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

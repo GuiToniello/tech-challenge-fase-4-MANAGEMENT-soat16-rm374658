@@ -119,47 +119,34 @@ public sealed class OrdemServicoReferenciaDomainTests
         Assert.Equal(StatusOrdemServico.Recebida, referencia.Status);
     }
 
-    [Theory]
-    [InlineData(StatusOrdemServico.Recebida)]
-    [InlineData(StatusOrdemServico.EmDiagnostico)]
-    [InlineData(StatusOrdemServico.AguardandoAprovacao)]
-    public void OrdemServicoReferencia_ValidacoesDeOrcamento_DevemPermitirStatusAnterioresAExecucao(StatusOrdemServico status)
+    [Fact]
+    public void OrdemServicoReferencia_Criar_DeveIniciarSemDebitoDeEstoque()
     {
         var referencia = CriarReferencia();
-        referencia.AtualizarStatus(status);
 
-        referencia.ValidarGeracaoOrcamento();
-        referencia.ValidarAprovacaoOrcamento();
-        referencia.ValidarRecusaOrcamento();
-    }
-
-    [Theory]
-    [InlineData(StatusOrdemServico.EmExecucao)]
-    [InlineData(StatusOrdemServico.Finalizada)]
-    [InlineData(StatusOrdemServico.Entregue)]
-    [InlineData(StatusOrdemServico.Encerrada)]
-    [InlineData(StatusOrdemServico.Cancelada)]
-    public void OrdemServicoReferencia_ValidarGeracaoOrcamento_DeveLancar_QuandoStatusNaoPermitir(StatusOrdemServico status)
-    {
-        var referencia = CriarReferencia();
-        referencia.AtualizarStatus(status);
-
-        var exception = Assert.Throws<DomainException>(referencia.ValidarGeracaoOrcamento);
-
-        Assert.Equal("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento gerado.", exception.Message);
+        Assert.False(referencia.EstoqueDebitado);
     }
 
     [Fact]
-    public void OrdemServicoReferencia_ValidarAprovacaoERecusa_DevemLancar_QuandoOrdemFinalizada()
+    public void OrdemServicoReferencia_RegistrarDebitoEstoque_DeveMarcarEstoqueDebitado()
     {
         var referencia = CriarReferencia();
-        referencia.AtualizarStatus(StatusOrdemServico.Finalizada);
 
-        var aprovacao = Assert.Throws<DomainException>(referencia.ValidarAprovacaoOrcamento);
-        var recusa = Assert.Throws<DomainException>(referencia.ValidarRecusaOrcamento);
+        referencia.RegistrarDebitoEstoque();
 
-        Assert.Equal("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento aprovado.", aprovacao.Message);
-        Assert.Equal("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento recusado.", recusa.Message);
+        Assert.True(referencia.EstoqueDebitado);
+    }
+
+    [Fact]
+    public void OrdemServicoReferencia_RegistrarDebitoEstoque_DeveLancar_QuandoEstoqueJaDebitado()
+    {
+        var referencia = CriarReferencia();
+        referencia.RegistrarDebitoEstoque();
+
+        var exception = Assert.Throws<DomainException>(referencia.RegistrarDebitoEstoque);
+
+        Assert.Equal("O estoque da ordem de servico ja foi debitado.", exception.Message);
+        Assert.True(referencia.EstoqueDebitado);
     }
 
     [Theory]

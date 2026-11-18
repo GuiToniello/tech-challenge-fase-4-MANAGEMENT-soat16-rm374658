@@ -2,6 +2,8 @@
 ' Modelo de dominio da Management API (fase 4).
 ' A ordem de servico em si vive no OS Service (outro repositorio, banco proprio). Aqui fica so a
 ' referencia minima dela (OrdemServicoReferencia), alimentada por eventos do SQS (ADR-019 e ADR-020).
+' O orcamento e o pagamento vivem no Billing (repo BILLING, banco proprio, ADR-021): a Management
+' so envia os servicos com o preco no evento OrdemServicoValidada e debita o estoque no PagamentoAprovado.
 
 class Cliente {
 	+Id : Guid
@@ -43,19 +45,7 @@ class OrdemServicoReferencia {
 	+VeiculoId : Guid
 	+ServicoIds : Guid[]
 	+Status : StatusOrdemServico
-}
-
-class Orcamento {
-	+Id : Guid
-	+DataGeracao : DateTime
-	+ValorTotal : decimal
-	+Status : StatusOrcamento
-}
-
-class OrcamentoServico {
-	+ServicoId : Guid
-	+NomeServico : string
-	+ValorTotal : decimal
+	+EstoqueDebitado : bool
 }
 
 Cliente "1" --> "0..*" Veiculo
@@ -65,9 +55,5 @@ ItemServico "*" --> "1" Insumo
 OrdemServicoReferencia ..> Cliente : clienteId (validado)
 OrdemServicoReferencia ..> Veiculo : veiculoId (validado)
 OrdemServicoReferencia ..> Servico : servicoIds (validados)
-
-Orcamento "1" -- "1" OrdemServicoReferencia : Id = ordemServicoId
-Orcamento "1" *-- "1..*" OrcamentoServico
-OrcamentoServico "*" ..> "1" Servico : snapshot
 
 @enduml

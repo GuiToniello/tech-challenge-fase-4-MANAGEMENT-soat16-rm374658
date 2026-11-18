@@ -13,3 +13,9 @@ output "cluster_region" {
 output "api_gateway_endpoint" {
   value = aws_apigatewayv2_api.this.api_endpoint
 }
+
+# URL de notificacao do Mercado Pago. O _k8s-apply.yml do repo BILLING monta a mesma URL a partir
+# do endpoint do API Gateway (descoberto pelo nome da API) e a grava no Secret do Billing.
+output "billing_webhook_url" {
+  value = "${aws_apigatewayv2_api.this.api_endpoint}/billing/api/pagamentos/notificacoes"
+}

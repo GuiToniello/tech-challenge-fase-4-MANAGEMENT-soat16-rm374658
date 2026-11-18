@@ -77,29 +77,6 @@ namespace TechChallenge.Oficina.Data.Migrations
                     b.ToTable("insumos", (string)null);
                 });
 
-            modelBuilder.Entity("TechChallenge.Oficina.Entities.Features.Orcamentos.Orcamento", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ordem_servico_id");
-
-                    b.Property<DateTime>("DataGeracao")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("data_geracao");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer")
-                        .HasColumnName("status");
-
-                    b.Property<decimal>("ValorTotal")
-                        .HasColumnType("numeric(18,2)")
-                        .HasColumnName("valor_total");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("orcamentos", (string)null);
-                });
-
             modelBuilder.Entity("TechChallenge.Oficina.Entities.Features.OrdensServico.OrdemServicoReferencia", b =>
                 {
                     b.Property<Guid>("Id")
@@ -109,6 +86,10 @@ namespace TechChallenge.Oficina.Data.Migrations
                     b.Property<Guid>("ClienteId")
                         .HasColumnType("uuid")
                         .HasColumnName("cliente_id");
+
+                    b.Property<bool>("EstoqueDebitado")
+                        .HasColumnType("boolean")
+                        .HasColumnName("estoque_debitado");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer")
@@ -250,46 +231,6 @@ namespace TechChallenge.Oficina.Data.Migrations
 
                     b.Navigation("Identificacao")
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("TechChallenge.Oficina.Entities.Features.Orcamentos.Orcamento", b =>
-                {
-                    b.OwnsMany("TechChallenge.Oficina.Entities.Features.Orcamentos.OrcamentoServico", "Servicos", b1 =>
-                        {
-                            b1.Property<int>("id")
-                                .ValueGeneratedOnAdd()
-                                .HasColumnType("integer");
-
-                            NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b1.Property<int>("id"));
-
-                            b1.Property<string>("NomeServico")
-                                .IsRequired()
-                                .HasMaxLength(150)
-                                .HasColumnType("character varying(150)")
-                                .HasColumnName("nome_servico");
-
-                            b1.Property<Guid>("ServicoId")
-                                .HasColumnType("uuid")
-                                .HasColumnName("servico_id");
-
-                            b1.Property<decimal>("ValorTotal")
-                                .HasColumnType("numeric(18,2)")
-                                .HasColumnName("valor_total");
-
-                            b1.Property<Guid>("ordem_servico_id")
-                                .HasColumnType("uuid");
-
-                            b1.HasKey("id");
-
-                            b1.HasIndex("ordem_servico_id");
-
-                            b1.ToTable("orcamentos_servicos", (string)null);
-
-                            b1.WithOwner()
-                                .HasForeignKey("ordem_servico_id");
-                        });
-
-                    b.Navigation("Servicos");
                 });
 
             modelBuilder.Entity("TechChallenge.Oficina.Entities.Features.Servicos.ItemServico", b =>

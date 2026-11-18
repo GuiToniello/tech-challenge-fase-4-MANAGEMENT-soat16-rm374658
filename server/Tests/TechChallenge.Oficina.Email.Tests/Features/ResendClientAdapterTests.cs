@@ -3,7 +3,7 @@ using Resend;
 using TechChallenge.Oficina.Email.Features;
 using Xunit;
 
-namespace TechChallenge.Oficina.Email.Tests.Features.Orcamentos;
+namespace TechChallenge.Oficina.Email.Tests.Features;
 
 public sealed class ResendClientAdapterTests
 {

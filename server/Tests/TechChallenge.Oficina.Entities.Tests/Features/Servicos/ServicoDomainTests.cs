@@ -106,4 +106,35 @@ public sealed class ServicoDomainTests
 
         Assert.Empty(servico.ItensServico);
     }
+
+    [Fact]
+    public void Servico_CalcularValor_DeveSomarQuantidadeVezesValorUnitarioDosInsumos()
+    {
+        var oleo = Insumo.Criar("Oleo 5W30", "Bosch", 10, 15.50m);
+        var filtro = Insumo.Criar("Filtro de Oleo", "Fram", 10, 10m);
+        var servico = Servico.Criar("Troca de Oleo", "Troca de oleo e filtro", [ItemServico.Criar(oleo, 2), ItemServico.Criar(filtro, 1)]);
+
+        var valor = servico.CalcularValor();
+
+        Assert.Equal(41m, valor);
+    }
+
+    [Fact]
+    public void Servico_CalcularValor_DeveRetornarZero_QuandoNaoPossuirItens()
+    {
+        var servico = Servico.Criar("Revisao", "Revisao completa", []);
+
+        Assert.Equal(0m, servico.CalcularValor());
+    }
+
+    [Fact]
+    public void Servico_CalcularValor_DeveUsarValorUnitarioAtualDoInsumo()
+    {
+        var insumo = Insumo.Criar("Pastilha de Freio", "Cobreq", 10, 50m);
+        var servico = Servico.Criar("Troca de Pastilha", "Troca das pastilhas de freio", [ItemServico.Criar(insumo, 1)]);
+
+        insumo.AtualizarValorUnitario(80m);
+
+        Assert.Equal(80m, servico.CalcularValor());
+    }
 }

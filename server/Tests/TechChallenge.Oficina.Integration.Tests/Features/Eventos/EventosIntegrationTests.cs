@@ -1,11 +1,9 @@
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using TechChallenge.Oficina.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Integration.Tests.Infrastructure;
 using TechChallenge.Oficina.UseCases.Features.Eventos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Contratos;
-using TechChallenge.Oficina.UseCases.Features.Orcamentos.ViewModels;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 using Xunit;
 
@@ -22,6 +20,24 @@ public sealed class EventosIntegrationTests : IDisposable
 
     public void Dispose() => _fixture.Dispose();
 
+    private async Task<int> ObterEstoqueAsync(Guid insumoId)
+        => (await _fixture.ObterContexto().Insumos.SingleAsync(insumo => insumo.Id == insumoId)).QuantidadeDisponivel;
+
+    private async Task<bool> ObterEstoqueDebitadoAsync(Guid ordemServicoId)
+        => (await _fixture.ObterContexto().OrdensServicoReferencias.SingleAsync(referencia => referencia.Id == ordemServicoId)).EstoqueDebitado;
+
+    private List<OrdemServicoValidada> CapturarValidacoesPublicadas()
+    {
+        var eventos = new List<OrdemServicoValidada>();
+
+        _fixture.EventosPublisherMock
+            .Setup(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback<OrdemServicoValidada, Guid, CancellationToken>((evento, _, _) => eventos.Add(evento))
+            .Returns(Task.CompletedTask);
+
+        return eventos;
+    }
+
     [Fact]
     public async Task OrdemServicoAberta_DadosValidos_DeveRegistrarReferenciaRecebida()
     {
@@ -35,7 +51,44 @@ public sealed class EventosIntegrationTests : IDisposable
         Assert.Equal(ordemServicoId, referencia.Id);
         Assert.Equal(StatusOrdemServico.Recebida, referencia.Status);
         Assert.Equal([servicoId], referencia.ServicoIds);
+        Assert.False(referencia.EstoqueDebitado);
         _fixture.EventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoRejeitada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OrdemServicoAberta_DadosValidos_DevePublicarOrdemServicoValidadaComServicosPrecificados()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture);
+        var ordemServicoId = Guid.NewGuid();
+        var validacoes = CapturarValidacoesPublicadas();
+
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemServicoId, clienteId, veiculoId, servicoId);
+
+        var evento = Assert.Single(validacoes);
+        Assert.Equal(ordemServicoId, evento.OrdemServicoId);
+        Assert.Equal(clienteId, evento.ClienteId);
+        Assert.Equal(veiculoId, evento.VeiculoId);
+        Assert.Equal("cliente@email.com", evento.ClienteEmail);
+        Assert.True(evento.EstoqueSuficiente);
+        Assert.Equal([new ServicoValidado(servicoId, "Troca de Vela", 60m)], evento.Servicos);
+        Assert.Equal(60m, evento.ValorTotal);
+        Assert.Equal(20, await ObterEstoqueAsync(insumoId));
+        _fixture.EventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), ordemServicoId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OrdemServicoAberta_EstoqueInsuficiente_DeveRegistrarEPublicarValidadaSemEstoque()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture, quantidadeDisponivel: 2);
+        var ordemServicoId = Guid.NewGuid();
+        var validacoes = CapturarValidacoesPublicadas();
+
+        var resultado = await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemServicoId, clienteId, veiculoId, servicoId);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        Assert.Single(await _fixture.ObterContexto().OrdensServicoReferencias.ToListAsync());
+        Assert.False(Assert.Single(validacoes).EstoqueSuficiente);
+        Assert.Equal(2, await ObterEstoqueAsync(insumoId));
     }
 
     [Fact]
@@ -54,6 +107,7 @@ public sealed class EventosIntegrationTests : IDisposable
             new OrdemServicoRejeitada(ordemServicoId, "O veiculo informado deve estar vinculado ao cliente da ordem de servico."),
             ordemServicoId,
             It.IsAny<CancellationToken>()), Times.Once);
+        _fixture.EventosPublisherMock.Verify(p => p.PublicarAsync(It.IsAny<OrdemServicoValidada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -98,25 +152,65 @@ public sealed class EventosIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task OrdemServicoExcluida_DeveRemoverReferenciaEOrcamento()
+    public async Task OrdemServicoExcluida_DeveRemoverReferencia()
     {
         var (clienteId, veiculoId, _, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture);
         var ordemServicoId = Guid.NewGuid();
         await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemServicoId, clienteId, veiculoId, servicoId);
-        var orcamentos = _fixture.CriarOrcamentosEndpoints();
-        Assert.IsType<Ok<OrcamentoViewModel>>(await orcamentos.Gerar(ordemServicoId, CancellationToken.None));
 
         var resultado = await CenarioOrdemServico.ExcluirOrdemServicoAsync(_fixture, ordemServicoId);
 
         Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
         Assert.Empty(await _fixture.ObterContexto().OrdensServicoReferencias.ToListAsync());
-        Assert.IsType<NotFound<Dictionary<string, string?>>>(await orcamentos.GetById(ordemServicoId, CancellationToken.None));
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, await CenarioOrdemServico.ExcluirOrdemServicoAsync(_fixture, ordemServicoId));
+    }
+
+    [Fact]
+    public async Task PagamentoAprovado_DeveDebitarEstoqueUmaUnicaVez()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture);
+        var ordemServicoId = Guid.NewGuid();
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemServicoId, clienteId, veiculoId, servicoId);
+
+        var primeiroPagamento = await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemServicoId);
+        var pagamentoRepetido = await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemServicoId);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, primeiroPagamento);
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, pagamentoRepetido);
+        Assert.Equal(16, await ObterEstoqueAsync(insumoId));
+        Assert.True(await ObterEstoqueDebitadoAsync(ordemServicoId));
+    }
+
+    [Fact]
+    public async Task PagamentoAprovado_EstoqueConsumidoPorOutraOrdem_DeveSerIgnoradoSemDebito()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture, quantidadeDisponivel: 6);
+        var ordemA = Guid.NewGuid();
+        var ordemB = Guid.NewGuid();
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemA, clienteId, veiculoId, servicoId);
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemB, clienteId, veiculoId, servicoId);
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemA));
+
+        var resultado = await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemB);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        Assert.Equal(2, await ObterEstoqueAsync(insumoId));
+        Assert.True(await ObterEstoqueDebitadoAsync(ordemA));
+        Assert.False(await ObterEstoqueDebitadoAsync(ordemB));
+    }
+
+    [Fact]
+    public async Task PagamentoAprovado_OrdemDesconhecida_DeveSerIgnorado()
+    {
+        var resultado = await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, Guid.NewGuid());
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
     }
 
     [Fact]
     public async Task EventoNaoTratado_DeveSerIgnorado()
     {
-        var resultado = await _fixture.CriarEventosController().ProcessarAsync(nameof(OrcamentoGerado), "{}", CancellationToken.None);
+        var resultado = await _fixture.CriarEventosController().ProcessarAsync(nameof(OrdemServicoValidada), "{}", CancellationToken.None);
 
         Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
     }

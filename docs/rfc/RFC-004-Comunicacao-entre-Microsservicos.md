@@ -1,9 +1,9 @@
 # RFC-004: Comunicação entre microsserviços
 
-> Uma RFC (Request for Comments) é uma proposta escrita: apresenta um problema, compara as opções e recomenda uma, para que a decisão seja discutida antes de ser adotada. As RFCs e ADRs são numeradas em sequência única entre este monorepo e os repositórios [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O índice está no [docs/arquitetura.md](../arquitetura.md#5-decisões-de-arquitetura-rfcs-e-adrs).
+> Uma RFC (Request for Comments) é uma proposta escrita: apresenta um problema, compara as opções e recomenda uma, para que a decisão seja discutida antes de ser adotada. As RFCs e ADRs são numeradas em sequência única entre este monorepo e os repositórios [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O índice está no [docs/arquitetura.md](../arquitetura.md#5-decisões-de-arquitetura-rfcs-e-adrs).
 
-- **Status**: Aceita
-- **Partes afetadas**: neste monorepo, `server/` (orçamento e mensageria), `SQS/` (filas) e as pipelines; fora dele, o repo OS-SERVICE, que publica e consome os mesmos eventos
+- **Status**: Aceita (com a atualização da seção 8, na entrada do Billing)
+- **Partes afetadas**: neste monorepo, `server/` (mensageria), `SQS/` (filas) e as pipelines; fora dele, os repos OS-SERVICE e BILLING, que publicam e consomem os mesmos eventos
 - **Resultado**: Amazon SQS FIFO, com uma fila de entrada por serviço e uma saga coreografada. A decisão está registrada na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)
 
 ## 1. Resumo
@@ -31,7 +31,7 @@ O que cada serviço precisa saber do outro:
 | # | Requisito | Exemplo no sistema |
 |---|---|---|
 | M1 | Um serviço fora do ar não pode derrubar o outro | Abrir uma OS enquanto a Management reinicia |
-| M2 | Ordem garantida entre os eventos de uma mesma OS | `OrcamentoGerado` processado antes de `OrcamentoAprovado` |
+| M2 | Ordem garantida entre os eventos de uma mesma OS | `OrcamentoGerado` processado antes de `PagamentoAprovado` |
 | M3 | Nova tentativa automática e um lugar para as mensagens que sempre falham | Banco indisponível durante o processamento |
 | M4 | Desfazer um passo quando o seguinte falha (compensação) | OS aberta com um cliente inexistente é cancelada |
 | M5 | Serviço gerenciado, criado por Terraform, sem pods novos no cluster | O cluster já está no limite |
@@ -66,7 +66,7 @@ O que cada serviço precisa saber do outro:
 - **Uma fila FIFO de entrada por serviço:** `techchallenge-oficina-management.fifo`, consumida pela Management, e `techchallenge-oficina-os-service.fifo`, consumida pelo OS Service. Cada serviço publica na fila do outro.
 - **Uma DLQ por fila:** depois de 5 recebimentos sem sucesso, a mensagem vai para a `...-dlq.fifo`, que a guarda por 14 dias.
 - **Ordem por OS:** `MessageGroupId` = id da OS, e `MessageDeduplicationId` = id do evento.
-- **Saga coreografada, com compensação:** a Management valida a OS aberta e, se algum cadastro não existir, publica `OrdemServicoRejeitada`; o OS Service então cancela a OS. O orçamento (gerar, aprovar e recusar) muda o status da OS pelos eventos `OrcamentoGerado`, `OrcamentoAprovado` e `OrcamentoRecusado`.
+- **Saga coreografada, com compensação:** a Management valida a OS aberta e, se algum cadastro não existir, publica `OrdemServicoRejeitada`; o OS Service então cancela a OS. O orçamento (gerar, aprovar e recusar) muda o status da OS por eventos (desde a entrada do Billing, `OrcamentoGerado`, `OrcamentoRecusado` e `PagamentoAprovado`; seção 8).
 - **Infraestrutura em Terraform**, na pasta [SQS/](../../SQS/README.md) deste monorepo, com um usuário IAM por serviço e a chave dele no SSM Parameter Store.
 - **Localmente**, o ElasticMQ faz o papel do SQS no `docker compose`.
 
@@ -79,9 +79,20 @@ O envelope, a lista de eventos, a idempotência e as credenciais estão na ADR-0
 | Sem transação entre o banco e a fila: o serviço grava e depois publica. Se a publicação falhar, a alteração fica gravada sem o evento | A falha gera o log `integracao.falha` (`sqs`, `publicacao`), e a requisição responde 500. Evolução: *transactional outbox* |
 | A fila entrega pelo menos uma vez: o mesmo evento pode chegar de novo depois de uma falha | Consumidores idempotentes: evento repetido, transição fora de ordem e OS desconhecida são ignorados (`evento.ignorado`) |
 | Uma mensagem com erro segura as próximas da mesma OS (FIFO) | Depois de 5 recebimentos (cerca de 5 min, com o *visibility timeout* de 60 s), ela vai para a DLQ e libera as próximas. A DLQ é analisada e reprocessada manualmente |
-| Consistência eventual: logo depois de abrir a OS, a Management ainda pode não conhecê-la | Gerar o orçamento responde 404 até o evento chegar; basta tentar de novo em alguns segundos (a collection do Postman espera entre os passos) |
-| Um novo serviço interessado nos mesmos eventos (por exemplo, faturamento ou execução) | Evolução: um tópico SNS FIFO na frente das filas (*fan-out*), sem mudar os consumidores atuais |
+| Consistência eventual: logo depois de abrir a OS, os outros serviços ainda podem não conhecê-la | Gerar o orçamento responde 404 até o evento chegar (desde a seção 8, no Billing); basta tentar de novo em alguns segundos (a collection do Postman espera entre os passos) |
+| Um novo serviço interessado nos mesmos eventos (por exemplo, faturamento ou execução) | Aconteceu com o Billing: uma fila a mais e *fan-out* no publicador, sem mudar os consumidores atuais (seção 8). O tópico SNS FIFO, previsto aqui como evolução, não foi usado |
 
 ## 7. Resultado
 
-Aceita e implementada. As filas estão em [SQS/](../../SQS/README.md), e a camada de mensageria fica em `server/` (projeto `TechChallenge.Oficina.Messaging`) e no repo OS-SERVICE. A decisão, com o envelope, os eventos, a saga e as credenciais, está na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
+Aceita e implementada. As filas estão em [SQS/](../../SQS/README.md), e a camada de mensageria fica em `server/` (projeto `TechChallenge.Oficina.Messaging`) e nos repos OS-SERVICE e BILLING. A decisão, com o envelope, os eventos, a saga e as credenciais, está na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
+
+## 8. Atualização: entrada do Billing
+
+Ainda na fase 4, o orçamento saiu da Management e foi para o Billing, um terceiro serviço com banco próprio ([ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)). Ele entrou com o mesmo modelo desta RFC: uma fila FIFO de entrada (`techchallenge-oficina-billing.fifo`), com DLQ e usuário IAM próprios, e a mesma saga coreografada.
+
+Com três serviços, o mesmo evento passou a interessar a mais de um serviço (por exemplo, o `OrdemServicoStatusAlterado` vai para a Management e para o Billing). Em vez do SNS + SQS da seção 4.1, a escolha foi o ***fan-out* no publicador**: cada serviço envia o mesmo envelope, com o mesmo id, para a fila de cada um dos outros dois. Os motivos:
+- é mais simples: sem tópico, assinaturas e políticas a mais, só uma lista de filas na configuração de quem publica;
+- funciona no ambiente local, porque o ElasticMQ emula o SQS, mas não o SNS (M7);
+- a permissão continua por fila: o usuário IAM de cada serviço só publica nas filas de que precisa.
+
+O preço é que quem publica precisa conhecer as filas de destino, e a publicação em duas filas pode ser parcial (os consumidores idempotentes absorvem a repetição). Os eventos novos, `OrdemServicoValidada` e `PagamentoAprovado`, estão na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).

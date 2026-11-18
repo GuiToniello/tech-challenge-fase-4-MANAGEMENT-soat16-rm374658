@@ -1,4 +1,4 @@
-# Filas FIFO entre a Management API e o OS Service. Uma mensagem recebida 5 vezes sem ser
+# Filas FIFO entre a Management API, o OS Service e o Billing. Uma mensagem recebida 5 vezes sem ser
 # apagada (maxReceiveCount) vai para a DLQ do servico, que a guarda por 14 dias para analise.
 
 resource "aws_sqs_queue" "dlq" {

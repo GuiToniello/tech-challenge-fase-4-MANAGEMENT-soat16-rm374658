@@ -85,9 +85,9 @@ public sealed class OrdemServicoStatusEmailSenderTests
     }
 
     [Fact]
-    public async Task EnviarStatusAlteradoAsync_DeveConterServicosEValorDoOrcamentoNoHTML()
+    public async Task EnviarStatusAlteradoAsync_DeveConterServicosSemValorDoOrcamentoNoHTML()
     {
-        var notificacao = CriarNotificacao(StatusOrdemServico.EmExecucao, valorOrcamento: 150m);
+        var notificacao = CriarNotificacao(StatusOrdemServico.EmExecucao);
         var sender = CriarSender();
         var emailCapturado = CapturarEmail();
 
@@ -99,19 +99,8 @@ public sealed class OrdemServicoStatusEmailSenderTests
             Assert.Contains(servico, email.HtmlBody);
         }
 
-        Assert.Contains("Informações do Orçamento", email.HtmlBody);
-        Assert.Contains("150,00", email.HtmlBody);
-    }
-
-    [Fact]
-    public async Task EnviarStatusAlteradoAsync_NaoDeveConterOrcamento_QuandoNaoHouverValor()
-    {
-        var sender = CriarSender();
-        var emailCapturado = CapturarEmail();
-
-        await sender.EnviarStatusAlteradoAsync(CriarNotificacao(StatusOrdemServico.EmDiagnostico), "cliente@teste.com");
-
-        Assert.DoesNotContain("Informações do Orçamento", emailCapturado().HtmlBody);
+        // O orcamento e do Billing: o email de status nao mostra mais o valor
+        Assert.DoesNotContain("Informações do Orçamento", email.HtmlBody);
     }
 
     [Theory]
@@ -149,7 +138,7 @@ public sealed class OrdemServicoStatusEmailSenderTests
         return () => emailCapturado ?? throw new InvalidOperationException("Nenhum email foi enviado.");
     }
 
-    private static NotificacaoStatusOrdemServico CriarNotificacao(StatusOrdemServico status, decimal? valorOrcamento = null)
+    private static NotificacaoStatusOrdemServico CriarNotificacao(StatusOrdemServico status)
     {
         return new NotificacaoStatusOrdemServico
         {
@@ -157,7 +146,6 @@ public sealed class OrdemServicoStatusEmailSenderTests
             ClienteId = Guid.NewGuid(),
             VeiculoId = Guid.NewGuid(),
             StatusNovo = status,
-            ValorOrcamento = valorOrcamento,
             Servicos = ["Revisao", "Alinhamento"]
         };
     }

@@ -18,7 +18,7 @@ public sealed class ExtensionsTests
         var settings = new SqsSettings
         {
             FilaConsumo = "techchallenge-oficina-management.fifo",
-            FilaPublicacao = "techchallenge-oficina-os-service.fifo",
+            FilasPublicacao = ["techchallenge-oficina-os-service.fifo", "techchallenge-oficina-billing.fifo"],
             ServiceUrl = "http://localhost:9324"
         };
 
@@ -36,7 +36,7 @@ public sealed class ExtensionsTests
     {
         var services = new ServiceCollection();
 
-        services.AddInfraMessaging(new SqsSettings { FilaPublicacao = "techchallenge-oficina-os-service.fifo" });
+        services.AddInfraMessaging(new SqsSettings { FilasPublicacao = ["techchallenge-oficina-os-service.fifo"] });
 
         Assert.DoesNotContain(services, descritor => descritor.ServiceType == typeof(IHostedService));
         Assert.Contains(services, descritor => descritor.ServiceType == typeof(IEventosPublisher));

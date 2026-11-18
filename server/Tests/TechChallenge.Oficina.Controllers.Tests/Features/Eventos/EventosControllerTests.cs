@@ -80,9 +80,27 @@ public sealed class EventosControllerTests
         Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
     }
 
+    [Fact]
+    public async Task ProcessarAsync_DeveProcessarPagamento_QuandoPagamentoAprovado()
+    {
+        var controller = CriarController();
+        var ordemServicoId = Guid.NewGuid();
+        var pagamentoId = Guid.NewGuid();
+        var dados = $$"""{"ordemServicoId":"{{ordemServicoId}}","pagamentoId":"{{pagamentoId}}","valor":150.75}""";
+        _useCasesMock
+            .Setup(u => u.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(ordemServicoId, pagamentoId, 150.75m), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ResultadoProcessamentoEvento.Processado);
+
+        var resultado = await controller.ProcessarAsync(nameof(PagamentoAprovado), dados, CancellationToken.None);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        _useCasesMock.Verify(u => u.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(ordemServicoId, pagamentoId, 150.75m), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Theory]
     [InlineData("OrcamentoGerado")]
     [InlineData("OrdemServicoRejeitada")]
+    [InlineData("OrdemServicoValidada")]
     [InlineData("EventoDesconhecido")]
     public async Task ProcessarAsync_DeveIgnorarSemChamarCasosDeUso_QuandoTipoNaoTratado(string tipo)
     {

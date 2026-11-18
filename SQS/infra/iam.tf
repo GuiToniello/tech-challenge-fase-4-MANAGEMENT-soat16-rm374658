@@ -7,7 +7,7 @@ resource "aws_iam_user" "sqs" {
   force_destroy = true
 }
 
-# Cada servico consome so a propria fila e publica so na fila do outro servico.
+# Cada servico consome so a propria fila e publica so nas filas dos outros servicos (publishes_to).
 data "aws_iam_policy_document" "sqs" {
   for_each = local.services
 
@@ -24,12 +24,12 @@ data "aws_iam_policy_document" "sqs" {
   }
 
   statement {
-    sid = "PublicarNaFilaDoOutroServico"
+    sid = "PublicarNasFilasDosOutrosServicos"
     actions = [
       "sqs:SendMessage",
       "sqs:GetQueueUrl",
     ]
-    resources = [aws_sqs_queue.this[each.value.publishes_to].arn]
+    resources = [for destino in each.value.publishes_to : aws_sqs_queue.this[destino].arn]
   }
 }
 

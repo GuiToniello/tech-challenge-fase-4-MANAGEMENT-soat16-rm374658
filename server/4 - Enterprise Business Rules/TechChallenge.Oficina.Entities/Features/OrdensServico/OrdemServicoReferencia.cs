@@ -14,6 +14,9 @@ public sealed class OrdemServicoReferencia
     public IReadOnlyCollection<Guid> ServicoIds => _servicoIds.AsReadOnly();
     public StatusOrdemServico Status { get; private set; }
 
+    // Indica que o estoque dos insumos ja foi debitado pelo pagamento aprovado (Billing): garante um unico debito por OS
+    public bool EstoqueDebitado { get; private set; }
+
     private OrdemServicoReferencia()
     {
     }
@@ -72,26 +75,13 @@ public sealed class OrdemServicoReferencia
         Status = status;
     }
 
-    public void ValidarGeracaoOrcamento()
+    public void RegistrarDebitoEstoque()
     {
-        ValidarStatusPermiteOrcamento("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento gerado.");
-    }
-
-    public void ValidarAprovacaoOrcamento()
-    {
-        ValidarStatusPermiteOrcamento("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento aprovado.");
-    }
-
-    public void ValidarRecusaOrcamento()
-    {
-        ValidarStatusPermiteOrcamento("Somente ordem de servico recebida, em diagnostico ou aguardando aprovacao pode ter orcamento recusado.");
-    }
-
-    private void ValidarStatusPermiteOrcamento(string mensagem)
-    {
-        if (Status != StatusOrdemServico.Recebida && Status != StatusOrdemServico.EmDiagnostico && Status != StatusOrdemServico.AguardandoAprovacao)
+        if (EstoqueDebitado)
         {
-            throw new DomainException(mensagem);
+            throw new DomainException("O estoque da ordem de servico ja foi debitado.");
         }
+
+        EstoqueDebitado = true;
     }
 }

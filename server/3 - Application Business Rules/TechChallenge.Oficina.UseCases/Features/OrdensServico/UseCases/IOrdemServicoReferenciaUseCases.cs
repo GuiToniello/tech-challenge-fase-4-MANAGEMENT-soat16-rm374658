@@ -9,4 +9,5 @@ public interface IOrdemServicoReferenciaUseCases
     Task<ResultadoProcessamentoEvento> RegistrarAsync(RegistrarOrdemServicoReferenciaCommand command, CancellationToken cancellationToken = default);
     Task<ResultadoProcessamentoEvento> AtualizarStatusAsync(OrdemServicoStatusAlterado evento, CancellationToken cancellationToken = default);
     Task<ResultadoProcessamentoEvento> RemoverAsync(OrdemServicoExcluida evento, CancellationToken cancellationToken = default);
+    Task<ResultadoProcessamentoEvento> ProcessarPagamentoAprovadoAsync(PagamentoAprovado evento, CancellationToken cancellationToken = default);
 }

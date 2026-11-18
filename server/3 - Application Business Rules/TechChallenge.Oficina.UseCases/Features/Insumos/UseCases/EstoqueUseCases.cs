@@ -12,10 +12,30 @@ public sealed class EstoqueUseCases : IEstoqueUseCases
         _insumoGateway = insumoGateway;
     }
 
-    public async Task VerificarDisponibilidadeParaOrcamentoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
+    // Consulta sem excecao usada na validacao da OS: a OS segue valida mesmo sem estoque, e o resultado vai no evento OrdemServicoValidada
+    public async Task<bool> PossuiDisponibilidadeAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
     {
         var insumosNecessarios = AgruparInsumosPorId(servicos);
 
+        foreach (var (insumoId, quantidadeTotal) in insumosNecessarios)
+        {
+            var insumo = await _insumoGateway.ObterPorIdAsync(insumoId, cancellationToken);
+
+            if (insumo is null || insumo.QuantidadeDisponivel < quantidadeTotal)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public async Task DebitarEstoqueParaOrdemServicoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
+    {
+        var insumosNecessarios = AgruparInsumosPorId(servicos);
+        var debitos = new List<(Insumo Insumo, int Quantidade)>(insumosNecessarios.Count);
+
+        // Confere todos os insumos antes de gravar o primeiro debito: com estoque insuficiente nenhum insumo e debitado (sem debito parcial)
         foreach (var (insumoId, quantidadeTotal) in insumosNecessarios)
         {
             var insumo = await _insumoGateway.ObterPorIdAsync(insumoId, cancellationToken);
@@ -26,23 +46,12 @@ public sealed class EstoqueUseCases : IEstoqueUseCases
             }
 
             insumo.VerificarDisponibilidade(quantidadeTotal);
+            debitos.Add((insumo, quantidadeTotal));
         }
-    }
 
-    public async Task DebitarEstoqueParaOrdemServicoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
-    {
-        var insumosNecessarios = AgruparInsumosPorId(servicos);
-
-        foreach (var (insumoId, quantidadeTotal) in insumosNecessarios)
+        foreach (var (insumo, quantidade) in debitos)
         {
-            var insumo = await _insumoGateway.ObterPorIdAsync(insumoId, cancellationToken);
-
-            if (insumo is null)
-            {
-                throw new KeyNotFoundException($"Insumo com ID '{insumoId}' nao encontrado.");
-            }
-
-            insumo.DebitarEstoque(quantidadeTotal);
+            insumo.DebitarEstoque(quantidade);
             await _insumoGateway.AtualizarAsync(insumo, cancellationToken);
         }
     }

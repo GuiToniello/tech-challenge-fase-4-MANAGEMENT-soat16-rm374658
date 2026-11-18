@@ -1,9 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using TechChallenge.Oficina.Email.Configuration;
 using TechChallenge.Oficina.Email.Features;
-using TechChallenge.Oficina.Email.Features.Orcamentos;
 using TechChallenge.Oficina.Email.Features.OrdensServico;
-using TechChallenge.Oficina.UseCases.Features.Orcamentos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 
 namespace TechChallenge.Oficina.Email;
@@ -16,7 +14,6 @@ public static class Extensions
         services.AddSingleton<Resend.IResend>(_ => Resend.ResendClient.Create(
             string.IsNullOrWhiteSpace(resendSettings.ApiKey) ? "dummy" : resendSettings.ApiKey));
         services.AddScoped<IResendClient, ResendClientAdapter>();
-        services.AddScoped<IOrcamentoEmailSender, OrcamentoEmailSender>();
         services.AddScoped<IOrdemServicoStatusEmailSender, OrdemServicoStatusEmailSender>();
 
         return services;

@@ -75,6 +75,28 @@ resource "aws_apigatewayv2_route" "health" {
   target    = "integrations/${aws_apigatewayv2_integration.health[each.key].id}"
 }
 
+# Webhook do Mercado Pago (Billing, repo BILLING): rota publica, sem authorizer, porque o Mercado Pago
+# nao envia o JWT. A rota exata tem prioridade sobre /billing/{proxy+}; a integracao e propria porque
+# esta rota nao tem $request.path.proxy.
+resource "aws_apigatewayv2_integration" "billing_webhook" {
+  api_id             = aws_apigatewayv2_api.this.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  integration_uri    = aws_lb_listener.apis["billing"].arn
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.this.id
+
+  request_parameters = {
+    "overwrite:path" = "/api/pagamentos/notificacoes"
+  }
+}
+
+resource "aws_apigatewayv2_route" "billing_webhook" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "POST /billing/api/pagamentos/notificacoes"
+  target    = "integrations/${aws_apigatewayv2_integration.billing_webhook.id}"
+}
+
 # Geracao do JWT com a claim cpf (Lambda issue-token do repo LAMBDA). Rota publica: e o login.
 resource "aws_apigatewayv2_integration" "issue_token" {
   api_id                 = aws_apigatewayv2_api.this.id

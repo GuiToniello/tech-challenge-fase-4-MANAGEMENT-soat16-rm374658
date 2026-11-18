@@ -31,6 +31,10 @@ public sealed class OrdemServicoReferenciaConfiguration : IEntityTypeConfigurati
             .HasConversion<int>()
             .IsRequired();
 
+        builder.Property(referencia => referencia.EstoqueDebitado)
+            .HasColumnName("estoque_debitado")
+            .IsRequired();
+
         // Colecao primitiva mapeada pelo campo privado: no PostgreSQL vira uma coluna uuid[]
         builder.Ignore(referencia => referencia.ServicoIds);
         builder.PrimitiveCollection<List<Guid>>("_servicoIds")

@@ -10,7 +10,7 @@ using TechChallenge.Oficina.UseCases.Features.OrdensServico.Logging;
 
 namespace TechChallenge.Oficina.Messaging.Features.Eventos;
 
-// Consome a fila FIFO do Management (eventos do OS Service) com long polling. A mensagem so e removida quando processada ou ignorada;
+// Consome a fila FIFO do Management (eventos do OS Service e do Billing) com long polling. A mensagem so e removida quando processada ou ignorada;
 // em caso de falha ela volta para a fila apos o visibility timeout e, depois de 5 recebimentos (maxReceiveCount), segue para a DLQ.
 public sealed class SqsConsumidorHostedService : BackgroundService
 {

@@ -63,6 +63,13 @@ public class Servico
         Descricao = descricaoNormalizada;
     }
 
+    // Preco do servico na validacao da OS: soma dos insumos (quantidade x valor unitario) arredondada em 2 casas (arredondamento bancario)
+    public decimal CalcularValor()
+    {
+        var valor = _itensServico.Sum(item => item.Quantidade * item.Insumo.ValorUnitario);
+        return decimal.Round(valor, 2, MidpointRounding.ToEven);
+    }
+
     public void DefinirItensServico(IReadOnlyCollection<ItemServico>? itensServico)
     {
         _itensServico.Clear();

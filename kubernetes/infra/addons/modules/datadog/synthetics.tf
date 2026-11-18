@@ -63,7 +63,7 @@ resource "datadog_synthetics_test" "health" {
 resource "datadog_service_level_objective" "uptime" {
   name        = "[oficina] Uptime das APIs"
   type        = "monitor"
-  description = "Uptime externo das APIs (Management e OS Service): synthetics em GET /<api>/health pelo API Gateway."
+  description = "Uptime externo das APIs (Management, OS Service e Billing): synthetics em GET /<api>/health pelo API Gateway."
   monitor_ids = [for t in datadog_synthetics_test.health : t.monitor_id]
   tags        = local.common_tags
 

@@ -2,11 +2,11 @@
 
 ## Objetivo
 
-Provisionar a rede e o Amazon EKS onde rodam a Management API e o OS Service (repo OS-SERVICE) e expô-los na Internet por HTTPS, pelo endpoint padrão (`execute-api`) de um Amazon API Gateway.
+Provisionar a rede e o Amazon EKS onde rodam a Management API, o OS Service (repo OS-SERVICE) e o Billing (repo BILLING) e expô-los na Internet por HTTPS, pelo endpoint padrão (`execute-api`) de um Amazon API Gateway.
 
-O Terraform gerencia a infraestrutura AWS, inclusive o API Gateway (state `foundation`), e, num state separado (`addons`), instala o Metrics Server e o Datadog Agent via Helm e cria os recursos do Datadog (módulo local `addons/modules/datadog/`). Os manifests da Management API ([k8s/](../k8s/kustomization.yaml)) são aplicados pelo GitHub Actions com `kubectl apply -k kubernetes/k8s` (seção [Aplicação dos manifests](#aplicação-dos-manifests)); os do OS Service, pelas pipelines do repo OS-SERVICE.
+O Terraform gerencia a infraestrutura AWS, inclusive o API Gateway (state `foundation`), e, num state separado (`addons`), instala o Metrics Server e o Datadog Agent via Helm e cria os recursos do Datadog (módulo local `addons/modules/datadog/`). Os manifests da Management API ([k8s/](../k8s/kustomization.yaml)) são aplicados pelo GitHub Actions com `kubectl apply -k kubernetes/k8s` (seção [Aplicação dos manifests](#aplicação-dos-manifests)); os do OS Service e os do Billing, pelas pipelines dos repos OS-SERVICE e BILLING.
 
-O banco de dados (RDS PostgreSQL) não é criado aqui: ele fica na pasta [DB/](../../DB/README.md) do monorepo, e o do OS Service, no repo OS-SERVICE. As filas SQS ficam na pasta [SQS/](../../SQS/README.md). O build da imagem (a partir de `server/`) e o push para o ECR ficam nas pipelines da raiz ([.github/workflows/README.md](../../.github/workflows/README.md)).
+O banco de dados (RDS PostgreSQL) não é criado aqui: ele fica na pasta [DB/](../../DB/README.md) do monorepo, e os do OS Service e do Billing, nos repos OS-SERVICE e BILLING. As filas SQS ficam na pasta [SQS/](../../SQS/README.md). O build da imagem (a partir de `server/`) e o push para o ECR ficam nas pipelines da raiz ([.github/workflows/README.md](../../.github/workflows/README.md)).
 
 ## Decisões consolidadas
 
@@ -18,9 +18,9 @@ O banco de dados (RDS PostgreSQL) não é criado aqui: ele fica na pasta [DB/](.
 - Os arquivos `.terraform.lock.hcl` são versionados: provider AWS `6.66.0` nas duas pastas, e Helm `2.17.0` e DataDog/datadog `4.25.0` no addons.
 - Observabilidade com Datadog (conta trial): o Agent (Helm) e os recursos do Datadog (métricas de log, monitores, synthetics, SLO e dashboard) ficam em Terraform, no addons, e são ligados ou desligados pela variable `DD_ENABLED` do GitHub. Detalhes em [DATADOG.md](DATADOG.md).
 - Sem Route 53, domínio próprio ou certificado próprio: o acesso usa o endpoint padrão do API Gateway (`https://<id>.execute-api.us-east-1.amazonaws.com`), que só atende HTTPS.
-- O API Gateway é uma HTTP API com um Lambda authorizer (repo LAMBDA) nas rotas das APIs (`/management/...` e `/os/...`). Ele exige um JWT válido do Auth0 com a claim `cpf`; o cadastro de cliente (`POST /management/api/clientes`) aceita JWT sem `cpf`. As APIs continuam validando o JWT. Ficam públicas, sem authorizer, as rotas `GET /management/health`, `GET /os/health` e `POST /auth/token` (Lambda que gera o JWT com `cpf`).
+- O API Gateway é uma HTTP API com um Lambda authorizer (repo LAMBDA) nas rotas das APIs (`/management/...`, `/os/...` e `/billing/...`). Ele exige um JWT válido do Auth0 com a claim `cpf`; o cadastro de cliente (`POST /management/api/clientes`) aceita JWT sem `cpf`. As APIs continuam validando o JWT. Ficam públicas, sem authorizer, as rotas `GET /management/health`, `GET /os/health`, `GET /billing/health`, `POST /billing/api/pagamentos/notificacoes` (webhook do Mercado Pago, que não envia o JWT) e `POST /auth/token` (Lambda que gera o JWT com `cpf`).
 - Não há Ingress nem Ingress Controller. O API Gateway chega aos pods por VPC Link → NLB interno → NodePort, tudo criado pelo Terraform da foundation. Nenhum Load Balancer é criado pelo Kubernetes.
-- Os repositórios ECR `techchallenge-oficina-management` (este monorepo) e `techchallenge-oficina-os-service` (repo OS-SERVICE) são criados manualmente, e as imagens são publicadas pelas pipelines de cada repositório. Aqui, os nodes só leem do ECR pela role IAM com `AmazonEC2ContainerRegistryReadOnly`; não existe Secret Kubernetes para pull.
+- Os repositórios ECR `techchallenge-oficina-management` (este monorepo), `techchallenge-oficina-os-service` (repo OS-SERVICE) e `techchallenge-oficina-billing` (repo BILLING) são criados manualmente, e as imagens são publicadas pelas pipelines de cada repositório. Aqui, os nodes só leem do ECR pela role IAM com `AmazonEC2ContainerRegistryReadOnly`; não existe Secret Kubernetes para pull.
 - `apply` e `destroy` rodam pelo GitHub Actions e só a partir da `main` (detalhes em [.github/workflows/README.md](../../.github/workflows/README.md)).
 - O ambiente é acadêmico e descartável; todos os recursos podem ser destruídos ao final.
 
@@ -45,9 +45,10 @@ Internet
    v
 API Gateway (HTTP API techchallenge-oficina-api, stage $default)
    |  POST /auth/token (público) ------------------> Lambda techchallenge-oficina-issue-token (repo LAMBDA)
-   |  GET /management/health e GET /os/health (públicos)
-   |  ANY /management/{proxy+} e ANY /os/{proxy+} --> Lambda authorizer techchallenge-oficina-authorizer (repo LAMBDA)
-   |  o prefixo sai do path (/management/api/x -> /api/x, /os/api/x -> /api/x)
+   |  GET /management/health, GET /os/health e GET /billing/health (públicos)
+   |  POST /billing/api/pagamentos/notificacoes (público, webhook do Mercado Pago) -> /api/pagamentos/notificacoes do Billing
+   |  ANY /management/{proxy+}, ANY /os/{proxy+} e ANY /billing/{proxy+} --> Lambda authorizer techchallenge-oficina-authorizer (repo LAMBDA)
+   |  o prefixo sai do path (/management/api/x -> /api/x, /os/api/x -> /api/x, /billing/api/x -> /api/x)
    v
 VPC Link (subnets privadas)
    |
@@ -56,15 +57,16 @@ NLB interno (subnets privadas): um listener e um target group por API
    |
    +--> /management --> :30080 (techchallenge-oficina-management) --> NodePort 30080 --> management-api:80 --> container:8080
    +--> /os         --> :30081 (techchallenge-oficina-os)         --> NodePort 30081 --> os-service-api:80 --> container:8080 (repo OS-SERVICE)
+   +--> /billing    --> :30082 (techchallenge-oficina-billing)    --> NodePort 30082 --> billing-api:80    --> container:8080 (repo BILLING)
 
 VPC 10.0.0.0/16 (tag Project = techchallenge-oficina)
   Subnets públicas techchallenge-oficina-public-{1,2}   (10.0.0.0/20, 10.0.16.0/20)
     -> EKS e nodes; rota 0.0.0.0/0 pelo Internet Gateway
   Subnets privadas techchallenge-oficina-private-{1,2}  (10.0.128.0/20, 10.0.144.0/20)
-    -> RDS (DB/infra), RDS do OS Service (repo OS-SERVICE), VPC Link e NLB interno; sem NAT e sem rota para a Internet
+    -> RDS (DB/infra), RDS do OS Service (repo OS-SERVICE), RDS do Billing (repo BILLING), VPC Link e NLB interno; sem NAT e sem rota para a Internet
 ```
 
-Não há NAT Gateway. Os nodes usam saída pelas subnets públicas para acessar ECR e demais serviços AWS, inclusive as filas SQS das duas APIs. Pela mesma saída, o Datadog Agent (namespace `datadog`) envia ao Datadog as métricas, os logs e os traces. No sentido inverso, os synthetics do Datadog chamam `GET /management/health` e `GET /os/health` pelo API Gateway, como qualquer cliente externo.
+Não há NAT Gateway. Os nodes usam saída pelas subnets públicas para acessar ECR e demais serviços AWS, inclusive as filas SQS das três APIs. Pela mesma saída, o Datadog Agent (namespace `datadog`) envia ao Datadog as métricas, os logs e os traces. No sentido inverso, os synthetics do Datadog chamam `GET /management/health`, `GET /os/health` e `GET /billing/health` pelo API Gateway, como qualquer cliente externo.
 
 ### Security Groups
 
@@ -74,7 +76,7 @@ Não há NAT Gateway. Os nodes usam saída pelas subnets públicas para acessar 
 | `techchallenge-oficina-nodes-sg` | Entrada total entre os próprios nodes e a partir do SG do cluster; entrada TCP `30000-32767` (NodePorts) só a partir da VPC (`10.0.0.0/16`), para o NLB; saída liberada |
 | `techchallenge-oficina-vpc-link-sg` | SG do VPC Link do API Gateway; sem entrada, saída liberada |
 
-O launch template anexa aos nodes o SG do cluster, o `techchallenge-oficina-nodes-sg` e o SG gerenciado pelo EKS. Os SGs dos bancos não são criados aqui. O `DB/infra` cria o próprio SG (`techchallenge-oficina-rds-sg`), com entrada `5432` a partir do `techchallenge-oficina-nodes-sg`, e o repo LAMBDA adiciona a própria regra nesse SG. O repo OS-SERVICE cria o SG do banco dele (`techchallenge-oficina-os-rds-sg`), também com entrada `5432` a partir do SG dos nodes.
+O launch template anexa aos nodes o SG do cluster, o `techchallenge-oficina-nodes-sg` e o SG gerenciado pelo EKS. Os SGs dos bancos não são criados aqui. O `DB/infra` cria o próprio SG (`techchallenge-oficina-rds-sg`), com entrada `5432` a partir do `techchallenge-oficina-nodes-sg`, e o repo LAMBDA adiciona a própria regra nesse SG. Os repos OS-SERVICE e BILLING criam o SG do banco de cada um (`techchallenge-oficina-os-rds-sg` e `techchallenge-oficina-billing-rds-sg`), também com entrada `5432` a partir do SG dos nodes.
 
 As regras garantem:
 
@@ -104,18 +106,18 @@ Responsabilidades:
 - Access Entry com `AmazonEKSClusterAdminPolicy` para o usuário `cluster_admin` (obrigatório).
 - Access Entry com `AmazonEKSClusterAdminPolicy` para quem executa o Terraform (`aws_caller_identity`).
 - Acesso externo às APIs ([api-gateway.tf](foundation/api-gateway.tf) e [nlb.tf](foundation/nlb.tf)), com um conjunto de rota, integração, listener e target group por entrada de `local.api_node_ports`:
-  - API Gateway HTTP API `techchallenge-oficina-api`, com stage `$default` (auto deploy) e as rotas `ANY /management/{proxy+}` e `ANY /os/{proxy+}`. A integração remove o prefixo do path (`overwrite:path`), como fazia o `rewrite-target` do antigo Ingress.
+  - API Gateway HTTP API `techchallenge-oficina-api`, com stage `$default` (auto deploy) e as rotas `ANY /management/{proxy+}`, `ANY /os/{proxy+}` e `ANY /billing/{proxy+}`. A integração remove o prefixo do path (`overwrite:path`), como fazia o `rewrite-target` do antigo Ingress.
   - Lambda authorizer (`REQUEST`, payload `2.0`, respostas simples, sem cache) nas rotas `ANY /<api>/{proxy+}`. Sem header `Authorization`, o gateway responde 401; token negado pelo authorizer responde 403.
-  - Rotas públicas: `GET /management/health` e `GET /os/health`, cada uma com integração própria que reescreve o path para `/health`, e `POST /auth/token`, integrada (`AWS_PROXY`) à Lambda de geração do JWT.
+  - Rotas públicas: `GET /management/health`, `GET /os/health` e `GET /billing/health`, cada uma com integração própria que reescreve o path para `/health`; `POST /billing/api/pagamentos/notificacoes`, o webhook do Mercado Pago, com integração própria que reescreve o path para `/api/pagamentos/notificacoes` (a rota exata tem prioridade sobre `/billing/{proxy+}`); e `POST /auth/token`, integrada (`AWS_PROXY`) à Lambda de geração do JWT.
   - As Lambdas são referenciadas pelo nome fixo (seção [Contrato com o repo LAMBDA](#contrato-com-o-repo-lambda)), então o apply não depende delas já existirem. Até o repo LAMBDA publicá-las, as rotas protegidas das APIs e o `/auth/token` respondem 500.
   - VPC Link `techchallenge-oficina-vpc-link` nas subnets privadas.
-  - NLB interno `techchallenge-oficina-nlb`, com cross-zone. Tem um listener TCP e um target group por API, na porta do NodePort: `techchallenge-oficina-management` (30080) e `techchallenge-oficina-os` (30081). Os target groups são do tipo `instance`, com health check HTTP em `/health`. O `techchallenge-oficina-os` só fica `healthy` depois do Bootstrap do repo OS-SERVICE.
+  - NLB interno `techchallenge-oficina-nlb`, com cross-zone. Tem um listener TCP e um target group por API, na porta do NodePort: `techchallenge-oficina-management` (30080), `techchallenge-oficina-os` (30081) e `techchallenge-oficina-billing` (30082). Os target groups são do tipo `instance`, com health check HTTP em `/health`. O `techchallenge-oficina-os` e o `techchallenge-oficina-billing` só ficam `healthy` depois do Bootstrap dos repos OS-SERVICE e BILLING.
   - Os target groups são anexados ao Auto Scaling Group do node group (`aws_autoscaling_attachment`), então nodes novos entram sozinhos.
-  - As portas ficam em `local.api_node_ports` (`management = 30080` e `os = 30081`, em [locals.tf](foundation/locals.tf)), e a chave vira o prefixo da rota e o sufixo do target group. Cada porta precisa ser igual ao `nodePort` do Service da API: `kubernetes/k8s/features/management-api/service.yml`, neste monorepo, e `kubernetes/k8s/features/os-service-api/service.yml`, no repo OS-SERVICE.
+  - As portas ficam em `local.api_node_ports` (`management = 30080`, `os = 30081` e `billing = 30082`, em [locals.tf](foundation/locals.tf)), e a chave vira o prefixo da rota e o sufixo do target group. Cada porta precisa ser igual ao `nodePort` do Service da API: `kubernetes/k8s/features/management-api/service.yml`, neste monorepo, `kubernetes/k8s/features/os-service-api/service.yml`, no repo OS-SERVICE, e `kubernetes/k8s/features/billing-api/service.yml`, no repo BILLING.
 
 O usuário `terraform` é o acesso principal: executa foundation, addons e `kubectl`, no CI e localmente. Rode sempre com esse mesmo usuário. Com outra identidade, a Access Entry do executor anterior é substituída, e o CI pode perder o acesso ao cluster.
 
-Outputs: `cluster_name`, `cluster_endpoint`, `cluster_region` e `api_gateway_endpoint` (URL pública da API).
+Outputs: `cluster_name`, `cluster_endpoint`, `cluster_region`, `api_gateway_endpoint` (URL pública da API) e `billing_webhook_url` (URL do webhook do Mercado Pago).
 
 ## Addons
 
@@ -126,15 +128,15 @@ Responsabilidades:
 - Usar as mesmas credenciais do usuário `terraform`.
 - Consultar o cluster pelo nome, sem ler o state remoto da foundation. Por isso, o `plan` do addons exige o cluster EKS de pé e, com o Datadog ligado, chaves do Datadog válidas.
 - Instalar Metrics Server (chart `3.12.2`) via Helm, usado pelo HPA.
-- Instalar o Datadog Agent (chart `3.255.0`, namespace `datadog`) via Helm, em [datadog-agent.tf](addons/datadog-agent.tf) com os valores de [datadog-agent-values.yaml](addons/datadog-agent-values.yaml): um Agent por node e um Cluster Agent, APM .NET por Single Step Instrumentation nos namespaces `oficina` e `os-service`, coleta dos logs dos containers e `http_check` no `/health/ready` das duas APIs.
-- Criar os recursos do Datadog no módulo local [addons/modules/datadog/](addons/modules/datadog), chamado por [datadog.tf](addons/datadog.tf): 5 métricas de log, 10 monitores, 2 synthetics (`GET /management/health` e `GET /os/health`) com 1 SLO e 1 dashboard (output `datadog_dashboard_url`). Os synthetics leem a URL do API Gateway por data source.
+- Instalar o Datadog Agent (chart `3.255.0`, namespace `datadog`) via Helm, em [datadog-agent.tf](addons/datadog-agent.tf) com os valores de [datadog-agent-values.yaml](addons/datadog-agent-values.yaml): um Agent por node e um Cluster Agent, APM .NET por Single Step Instrumentation nos namespaces `oficina`, `os-service` e `billing`, coleta dos logs dos containers e `http_check` no `/health/ready` das três APIs.
+- Criar os recursos do Datadog no módulo local [addons/modules/datadog/](addons/modules/datadog), chamado por [datadog.tf](addons/datadog.tf): 5 métricas de log, 10 monitores, 3 synthetics (`GET /management/health`, `GET /os/health` e `GET /billing/health`) com 1 SLO e 1 dashboard (output `datadog_dashboard_url`). Os synthetics leem a URL do API Gateway por data source.
 - O Agent e o módulo têm `count` por `datadog_enabled`. Com `false` (`DD_ENABLED=false` no CI), os dois saem no próximo apply.
 
 No CI, as chaves e as opções do Datadog chegam por `TF_VAR_datadog_*`, a partir dos secrets e variables do GitHub. Localmente, as chaves vão por `TF_VAR_datadog_*`, e as opções ficam no `terraform.tfvars` ([README.md](README.md#4-instale-os-addons)). Detalhes em [DATADOG.md](DATADOG.md).
 
 ## Contrato com o DB (`DB/infra`)
 
-O [`DB/infra`](../../DB/README.md) encontra a rede pelo cluster EKS e por nome ([data.tf](../../DB/infra/data.tf)), sem ler o state da foundation. O `DB/infra` do repo OS-SERVICE faz o mesmo. Estes nomes **não podem mudar**:
+O [`DB/infra`](../../DB/README.md) encontra a rede pelo cluster EKS e por nome ([data.tf](../../DB/infra/data.tf)), sem ler o state da foundation. Os `DB/infra` dos repos OS-SERVICE e BILLING fazem o mesmo. Estes nomes **não podem mudar**:
 
 | O que | Valor |
 |---|---|
@@ -142,7 +144,7 @@ O [`DB/infra`](../../DB/README.md) encontra a rede pelo cluster EKS e por nome (
 | Subnets privadas | `Name = techchallenge-oficina-private-1` e `techchallenge-oficina-private-2`, em AZs diferentes. O `DB/infra` filtra `techchallenge-oficina-private-*` na VPC do cluster |
 | SG dos nodes | `techchallenge-oficina-nodes-sg`, anexado aos nodes pelo launch template |
 
-Alterar `project_name`, `cluster_name` ou o nome/descrição do SG dos nodes recria esses recursos e quebra os dois `DB/infra`. No sentido inverso, o apply dos manifests consome do DB o identifier do RDS `techchallenge-oficina-postgres`, para descobrir o endpoint.
+Alterar `project_name`, `cluster_name` ou o nome/descrição do SG dos nodes recria esses recursos e quebra os três `DB/infra`. No sentido inverso, o apply dos manifests consome do DB o identifier do RDS `techchallenge-oficina-postgres`, para descobrir o endpoint.
 
 ## Contrato com o repo OS-SERVICE
 
@@ -157,15 +159,29 @@ O [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERV
 
 As filas e a chave de acesso do OS Service no SSM vêm do [SQS/](../../SQS/README.md) deste monorepo, não desta pasta.
 
+## Contrato com o repo BILLING
+
+O [repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658) também não aplica nada desta pasta: usa o que a foundation e o addons criam e cria só o próprio RDS e os próprios manifests.
+
+| O que | Valor | Uso |
+|---|---|---|
+| Rota e NodePort | Prefixo `billing` e porta `30082` em `local.api_node_ports`; target group `techchallenge-oficina-billing` | O Service `billing-api` do BILLING usa `nodePort: 30082` |
+| Webhook do Mercado Pago | Rota pública `POST /billing/api/pagamentos/notificacoes` e output `billing_webhook_url` | O `_k8s-apply.yml` do BILLING monta a mesma URL, a partir do endpoint do API Gateway, e a grava no Secret do Billing |
+| Namespace e serviço | Namespace `billing`, Deployment e Service `billing-api` | APM (Single Step Instrumentation), `http_check` em `http://billing-api.billing.svc.cluster.local/health/ready` e synthetic em `GET /billing/health` |
+| Rede | Cluster `techchallenge-oficina-eks`, subnets `techchallenge-oficina-private-*` e SG `techchallenge-oficina-nodes-sg` | O `DB/infra` do BILLING cria o RDS `techchallenge-oficina-billing-postgres` e o SG `techchallenge-oficina-billing-rds-sg` nesta rede |
+| Destroy | RDS `techchallenge-oficina-billing-postgres` e SG `techchallenge-oficina-billing-rds-sg` | O Destroy deste monorepo falha (`billing-check`) se eles ainda existirem |
+
+As filas e a chave de acesso do Billing no SSM também vêm do [SQS/](../../SQS/README.md) deste monorepo.
+
 ## Contrato com o repo LAMBDA
 
 O [repo LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658) publica as funções com AWS SAM e cria a permissão para o API Gateway invocá-las. A foundation as referencia pelo nome, sem ler o state do LAMBDA ([locals.tf](foundation/locals.tf)):
 
 | O que | Valor | Uso aqui |
 |---|---|---|
-| Lambda authorizer | `techchallenge-oficina-authorizer` | `aws_apigatewayv2_authorizer.lambda`, aplicado à rota `ANY /management/{proxy+}` |
+| Lambda authorizer | `techchallenge-oficina-authorizer` | `aws_apigatewayv2_authorizer.lambda`, aplicado às rotas `ANY /<api>/{proxy+}` (`management`, `os` e `billing`) |
 | Lambda de geração do JWT | `techchallenge-oficina-issue-token` | Rota `POST /auth/token` |
-| Rota liberada sem `cpf` | `POST /management/api/clientes` | O authorizer aceita JWT sem `cpf` nessa rota. Mudar o prefixo `management` em `local.api_node_ports` exige mudar o LAMBDA. As rotas `/os/...` exigem sempre o `cpf` |
+| Rota liberada sem `cpf` | `POST /management/api/clientes` | O authorizer aceita JWT sem `cpf` nessa rota. Mudar o prefixo `management` em `local.api_node_ports` exige mudar o LAMBDA. As rotas `/os/...` e `/billing/...` exigem sempre o `cpf` (o webhook do Mercado Pago não passa pelo authorizer) |
 | SG da Lambda na VPC | `techchallenge-oficina-lambda-sg` | O Destroy confere que ele já foi removido |
 
 A Lambda de busca de clientes do repo LAMBDA fica nas subnets privadas, com o próprio SG e uma regra no SG do RDS. Por isso o LAMBDA é destruído antes deste monorepo (RDS e rede).
@@ -181,11 +197,11 @@ Ordem no deploy, feita pelos jobs do Bootstrap (e na mesma ordem pelo Deploy):
 3. Imagem da Management API no ECR (`server/`).
 4. Manifests (`kubernetes/k8s/`), com rollout restart.
 
-As filas (`SQS/infra`) são aplicadas em paralelo, antes dos manifests. Depois, o Bootstrap do repo OS-SERVICE e o Deploy do repo LAMBDA.
+As filas (`SQS/infra`) são aplicadas em paralelo, antes dos manifests. Depois, os Bootstraps dos repos OS-SERVICE e BILLING (em qualquer ordem) e o Deploy do repo LAMBDA.
 
 O apply dos manifests ([_k8s-apply.yml](../../.github/workflows/_k8s-apply.yml), chamado pelo Bootstrap, pelo Deploy e pelo workflow manual [K8s Apply](../../.github/workflows/k8s-apply.yml), este com `restart-pods` padrão `true`) descobre o endpoint do RDS, monta o `kubernetes/k8s/.env` com a connection string e o `ResendSettings__ApiKey` a partir dos secrets do GitHub e com a chave do SQS lida do SSM, roda `kubectl apply -k kubernetes/k8s` e, se pedido, faz o `rollout restart` da API. O restart é necessário quando o Secret muda (`disableNameSuffixHash` mantém o mesmo nome) ou quando há imagem nova, já que o Deployment usa a tag `latest` com `imagePullPolicy: Always`. O Deploy aplica os manifests, com restart, em todo push na `main` que altere alguma parte (aplicação, `DB/infra`, `SQS/infra`, `kubernetes/infra` ou `kubernetes/k8s`).
 
-O Service da Management API é `NodePort`, com porta fixa (30080) que o NLB da foundation usa como destino; o do OS Service usa a 30081. Não há manifest de Ingress.
+O Service da Management API é `NodePort`, com porta fixa (30080) que o NLB da foundation usa como destino; o do OS Service usa a 30081, e o do Billing, a 30082. Não há manifest de Ingress.
 
 ## Validação
 
@@ -212,13 +228,14 @@ O CI não usa `terraform.tfvars`: aplica os defaults de `variables.tf` e, no add
 
 EKS (control plane cobrado por hora), os dois nodes com seus discos EBS, o NLB interno (cobrado por hora) e o API Gateway (cobrado por requisição) geram custos enquanto existem. O Datadog não tem custo durante o trial de 14 dias, sem cartão; antes do fim, defina `DD_ENABLED=false` e rode o Bootstrap, ou rode o Destroy ([DATADOG.md](DATADOG.md#4-trial-de-14-dias)).
 
-Ordem: **LAMBDA** e **OS-SERVICE** (repos separados) → **Destroy** deste monorepo, que apaga o RDS antes da rede. Os ECRs são manuais e ficam fora do destroy. Os RDS usam as subnets privadas e os SGs deles referenciam o SG dos nodes; se algum ainda existir, o destroy da VPC falha com `DependencyViolation`.
+Ordem: **LAMBDA**, **OS-SERVICE** e **BILLING** (repos separados, em qualquer ordem) → **Destroy** deste monorepo, que apaga o RDS antes da rede. Os ECRs são manuais e ficam fora do destroy. Os RDS usam as subnets privadas e os SGs deles referenciam o SG dos nodes; se algum ainda existir, o destroy da VPC falha com `DependencyViolation`.
 
 Rode o workflow [Destroy](../../.github/workflows/destroy.yml) com `confirm = destroy` e aprove no Environment `destroy`. A sequência é:
 1. `lambda-check`: falha se o SG `techchallenge-oficina-lambda-sg` (repo LAMBDA) ainda existir.
 2. `os-service-check`: falha se o RDS `techchallenge-oficina-os-postgres` ou o SG `techchallenge-oficina-os-rds-sg` (repo OS-SERVICE) ainda existirem.
-3. `gate`: aprovação manual.
-4. SQS (`SQS/infra`), em paralelo com o RDS: filas, usuários IAM e parâmetros do SSM.
-5. RDS (`DB/infra`): os dados são perdidos.
-6. Addons: Metrics Server, Datadog Agent e recursos do Datadog.
-7. Foundation, que leva junto o API Gateway, o VPC Link e o NLB. Nenhum Load Balancer é criado pelo Kubernetes, então não há o que limpar antes. Roda mesmo se o destroy dos addons falhar (por exemplo, com chaves do Datadog revogadas), para o EKS não ficar ligado gerando custo; o run fica vermelho. Não roda se o destroy do RDS falhar ou se o dos addons for cancelado. O bucket S3 do state e os ECRs ficam fora do `destroy`.
+3. `billing-check`: falha se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` (repo BILLING) ainda existirem.
+4. `gate`: aprovação manual.
+5. SQS (`SQS/infra`), em paralelo com o RDS: filas, usuários IAM e parâmetros do SSM.
+6. RDS (`DB/infra`): os dados são perdidos.
+7. Addons: Metrics Server, Datadog Agent e recursos do Datadog.
+8. Foundation, que leva junto o API Gateway, o VPC Link e o NLB. Nenhum Load Balancer é criado pelo Kubernetes, então não há o que limpar antes. Roda mesmo se o destroy dos addons falhar (por exemplo, com chaves do Datadog revogadas), para o EKS não ficar ligado gerando custo; o run fica vermelho. Não roda se o destroy do RDS falhar ou se o dos addons for cancelado. O bucket S3 do state e os ECRs ficam fora do `destroy`.

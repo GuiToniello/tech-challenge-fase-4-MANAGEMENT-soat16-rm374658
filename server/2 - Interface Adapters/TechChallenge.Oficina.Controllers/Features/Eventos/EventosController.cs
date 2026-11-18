@@ -26,6 +26,7 @@ namespace TechChallenge.Oficina.Controllers.Features.Eventos
                 nameof(OrdemServicoAtualizada) => await RegistrarAsync(Desserializar<OrdemServicoAtualizada>(tipo, dadosJson), cancellationToken),
                 nameof(OrdemServicoStatusAlterado) => await _ordemServicoReferenciaUseCases.AtualizarStatusAsync(Desserializar<OrdemServicoStatusAlterado>(tipo, dadosJson), cancellationToken),
                 nameof(OrdemServicoExcluida) => await _ordemServicoReferenciaUseCases.RemoverAsync(Desserializar<OrdemServicoExcluida>(tipo, dadosJson), cancellationToken),
+                nameof(PagamentoAprovado) => await _ordemServicoReferenciaUseCases.ProcessarPagamentoAprovadoAsync(Desserializar<PagamentoAprovado>(tipo, dadosJson), cancellationToken),
                 // Eventos publicados pelo proprio Management ou de outros tipos nao interessam a este servico
                 _ => ResultadoProcessamentoEvento.Ignorado
             };

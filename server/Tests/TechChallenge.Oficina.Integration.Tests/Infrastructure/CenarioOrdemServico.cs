@@ -15,7 +15,7 @@ using Xunit;
 namespace TechChallenge.Oficina.Integration.Tests.Infrastructure;
 
 /// <summary>
-/// Monta os cadastros do Management pelos controllers e simula os eventos do OS Service (dados JSON em camelCase, como no envelope SQS).
+/// Monta os cadastros do Management pelos controllers e simula os eventos do OS Service e do Billing (dados JSON em camelCase, como no envelope SQS).
 /// </summary>
 internal static class CenarioOrdemServico
 {
@@ -83,6 +83,9 @@ internal static class CenarioOrdemServico
 
     public static Task<ResultadoProcessamentoEvento> ExcluirOrdemServicoAsync(IntegrationTestFixture fixture, Guid ordemServicoId)
         => ProcessarAsync(fixture, new OrdemServicoExcluida(ordemServicoId));
+
+    public static Task<ResultadoProcessamentoEvento> AprovarPagamentoAsync(IntegrationTestFixture fixture, Guid ordemServicoId, decimal valor = 60m)
+        => ProcessarAsync(fixture, new PagamentoAprovado(ordemServicoId, Guid.NewGuid(), valor));
 
     private static Task<ResultadoProcessamentoEvento> ProcessarAsync<TEvento>(IntegrationTestFixture fixture, TEvento evento)
         => fixture.CriarEventosController().ProcessarAsync(typeof(TEvento).Name, JsonSerializer.Serialize(evento, OpcoesJson), CancellationToken.None);

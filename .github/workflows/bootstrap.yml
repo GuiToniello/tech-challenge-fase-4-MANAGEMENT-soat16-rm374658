@@ -2,8 +2,9 @@ name: Bootstrap
 # Sobe o ambiente inteiro, na ordem: testes → VPC/EKS/API Gateway → addons → RDS → imagem no ECR → manifests.
 # As filas SQS (com usuários IAM e chaves no SSM) sobem em paralelo, logo depois dos testes, e antes dos manifests.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
-# Depois dele, rode o Deploy do repo LAMBDA (as Lambdas usam a VPC e o RDS criados aqui) e o Bootstrap
-# do repo OS-SERVICE (usa a VPC, o EKS, a rota /os do API Gateway e as filas SQS criados aqui).
+# Depois dele, rode os Bootstraps dos repos OS-SERVICE e BILLING, em qualquer ordem (usam a VPC, o EKS, as rotas
+# /os e /billing do API Gateway e as filas SQS criados aqui), e por fim o Deploy do repo LAMBDA (as Lambdas usam
+# a VPC e o RDS criados aqui). Ordem entre os repos: este → OS-SERVICE e BILLING → LAMBDA.
 
 on:
   workflow_dispatch:

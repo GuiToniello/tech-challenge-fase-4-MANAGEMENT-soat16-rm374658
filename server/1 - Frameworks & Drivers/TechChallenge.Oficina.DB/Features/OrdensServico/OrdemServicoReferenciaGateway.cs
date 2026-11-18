@@ -37,4 +37,19 @@ public sealed class OrdemServicoReferenciaGateway : IOrdemServicoReferenciaGatew
         _context.OrdensServicoReferencias.Remove(referencia);
         await _context.SaveChangesAsync(cancellationToken);
     }
+
+    // Os gateways do escopo compartilham este DbContext: os SaveChanges feitos dentro da operacao entram na mesma transacao.
+    // Sem commit (excecao), nada fica gravado. O provedor InMemory (testes) nao tem transacao: a operacao roda direto.
+    public async Task ExecutarEmTransacaoAsync(Func<Task> operacao, CancellationToken cancellationToken = default)
+    {
+        if (!_context.Database.IsRelational())
+        {
+            await operacao();
+            return;
+        }
+
+        await using var transacao = await _context.Database.BeginTransactionAsync(cancellationToken);
+        await operacao();
+        await transacao.CommitAsync(cancellationToken);
+    }
 }
