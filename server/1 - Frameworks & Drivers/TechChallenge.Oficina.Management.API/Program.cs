@@ -61,7 +61,7 @@ var resendSettings = builder.Configuration
     ?? new ResendSettings();
 builder.Services.AddInfraEmail(resendSettings);
 
-// Integracao com o OS Service e o Billing por eventos (Amazon SQS); credenciais e regiao pela cadeia padrao do AWS SDK
+// Integracao com o OS Service, o Billing e o Execucao e Producao por eventos (Amazon SQS); credenciais e regiao pela cadeia padrao do AWS SDK
 var sqsSettings = builder.Configuration
     .GetSection(SqsSettings.SectionName)
     .Get<SqsSettings>()

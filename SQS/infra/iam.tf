@@ -7,7 +7,8 @@ resource "aws_iam_user" "sqs" {
   force_destroy = true
 }
 
-# Cada servico consome so a propria fila e publica so nas filas dos outros servicos (publishes_to).
+# Cada servico consome so a propria fila e publica so nas filas listadas em publishes_to (servicos
+# que consomem algum evento dele).
 data "aws_iam_policy_document" "sqs" {
   for_each = local.services
 

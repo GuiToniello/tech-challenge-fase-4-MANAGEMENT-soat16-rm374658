@@ -18,7 +18,7 @@ variable "synthetics_status" {
   default = "live"
 }
 
-# 300 s = 5 min: 1 teste por API (hoje 3: management, os e billing), ~288 execucoes/dia por teste, coberto pelo trial.
+# 300 s = 5 min: 1 teste por API (hoje 4: management, os, billing e execution), ~288 execucoes/dia por teste, coberto pelo trial.
 variable "synthetics_tick_every" {
   type    = number
   default = 300

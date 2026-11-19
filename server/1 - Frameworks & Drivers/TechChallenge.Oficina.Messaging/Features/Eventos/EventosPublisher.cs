@@ -8,7 +8,7 @@ using TechChallenge.Oficina.UseCases.Features.OrdensServico.Logging;
 
 namespace TechChallenge.Oficina.Messaging.Features.Eventos;
 
-// Publica os eventos do Management nas filas FIFO de destino (OS Service e Billing): o envelope e montado uma vez e o mesmo (mesmo id) vai para cada fila, na ordem configurada.
+// Publica os eventos do Management nas filas FIFO de destino (OS Service, Billing e Execucao e Producao): o envelope e montado uma vez e o mesmo (mesmo id) vai para cada fila, na ordem configurada.
 // MessageGroupId = OS (ordem garantida por OS) e MessageDeduplicationId = id do envelope.
 public sealed class EventosPublisher : IEventosPublisher
 {

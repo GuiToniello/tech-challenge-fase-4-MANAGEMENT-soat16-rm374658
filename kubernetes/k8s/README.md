@@ -5,7 +5,7 @@ Este documento descreve a estrutura desta pasta (`kubernetes/k8s/`), com os mani
 
 Os manifests foram derivados originalmente do docker-compose da aplicação. O código fica em `server/`, na raiz do monorepo, e o build da imagem e o push para o ECR ficam nas pipelines da raiz ([.github/workflows/README.md](../../.github/workflows/README.md)). O banco de dados (Amazon RDS) fica na pasta [DB/](../../DB/README.md), e as filas SQS, na pasta [SQS/](../../SQS/README.md). Visão geral da pasta `kubernetes/`: [README](../README.md).
 
-O OS Service roda no mesmo cluster, mas os manifests dele (namespace `os-service`, Deployment, Service `NodePort` 30081, HPA, ConfigMap e Secret `os-service-api-secrets`) ficam no [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), no mesmo padrão desta pasta. O mesmo vale para o Billing (namespace `billing`, Service `NodePort` 30082 e Secret `billing-api-secrets`), no [repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658).
+O OS Service roda no mesmo cluster, mas os manifests dele (namespace `os-service`, Deployment, Service `NodePort` 30081, HPA, ConfigMap e Secret `os-service-api-secrets`) ficam no [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), no mesmo padrão desta pasta. O mesmo vale para o Billing (namespace `billing`, Service `NodePort` 30082 e Secret `billing-api-secrets`), no [repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), e para o Execução e Produção (namespace `execution`, Service `NodePort` 30083 e Secret `execution-api-secrets`), no [repo EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658).
 
 ## 2. Estrutura adotada
 Foi adotado o padrão folder-by-feature, com uma pasta por serviço.
@@ -27,8 +27,8 @@ A pasta da API contém:
 - O Deployment é exposto por um Service do tipo `NodePort`, com porta fixa (30080). A porta só aceita tráfego de dentro da VPC, então o Service não fica exposto diretamente na Internet.
 - O API Gateway recebe as requisições HTTPS e, pelo VPC Link e pelo NLB interno (criados pela foundation), entrega o caminho `/management/...` no NodePort da API (seção 8).
 - O ConfigMap (`management-api-config`) guarda configurações não sensíveis, inclusive os nomes das filas SQS. O Secret (`oficina-api-secrets`) guarda os dados sensíveis (conexão com o RDS, chave do Resend e chave de acesso ao SQS).
-- Um HPA acompanha CPU e memória e ajusta o Deployment entre 1 e 3 réplicas, com base nas métricas do Metrics Server.
-- O Datadog Agent (namespace `datadog`, instalado pelo `kubernetes/infra/addons`) coleta métricas, logs e traces dos pods. O tracer .NET (APM) é injetado pelo próprio Agent nos pods dos namespaces `oficina`, `os-service` e `billing`, sem mudança na imagem (seção 4.4).
+- Um HPA acompanha CPU e memória e ajusta o Deployment entre 1 e 2 réplicas, com base nas métricas do Metrics Server.
+- O Datadog Agent (namespace `datadog`, instalado pelo `kubernetes/infra/addons`) coleta métricas, logs e traces dos pods. O tracer .NET (APM) é injetado pelo próprio Agent nos pods dos namespaces `oficina`, `os-service`, `billing` e `execution`, sem mudança na imagem (seção 4.4).
 
 ```mermaid
 flowchart TD
@@ -42,7 +42,7 @@ flowchart TD
 
       ConfigMap[ConfigMap\nConfiguracoes nao sensiveis] --> Deployment
       Secret[Secret oficina-api-secrets\nConfiguracoes sensiveis] --> Deployment
-      HPA[HPA\nDe 1 a 3 replicas] --> Deployment
+      HPA[HPA\nDe 1 a 2 replicas] --> Deployment
     end
 
     Metrics[Metrics Server] --> HPA
@@ -75,6 +75,7 @@ Comandos para verificação:
 - `kubectl get pods,svc,hpa -n oficina`
 - `kubectl get pods,svc,hpa -n os-service` (OS Service, depois do Bootstrap do repo OS-SERVICE)
 - `kubectl get pods,svc,hpa -n billing` (Billing, depois do Bootstrap do repo BILLING)
+- `kubectl get pods,svc,hpa -n execution` (Execução e Produção, depois do Bootstrap do repo EXECUTION)
 - `kubectl get pods -n datadog` (2 agents e 1 cluster-agent)
 
 Opcional: para acessar a API via localhost sem passar pelo API Gateway, encaminhe a porta do Service:
@@ -82,7 +83,7 @@ Opcional: para acessar a API via localhost sem passar pelo API Gateway, encaminh
 
 ## 4. Recursos criados para a API
 Para a API foram criados os seguintes recursos:
-1. ConfigMap `management-api-config` com configurações não sensíveis (`ASPNETCORE_ENVIRONMENT=Production`, `ASPNETCORE_URLS=http://+:8080`), o nível de log do Serilog (`Serilog__MinimumLevel__Default=Information` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore=Warning`), as filas SQS (`SqsSettings__FilaConsumo=techchallenge-oficina-management.fifo` e a lista de publicação, o *fan-out* da ADR-020: `SqsSettings__FilasPublicacao__0=techchallenge-oficina-os-service.fifo` e `SqsSettings__FilasPublicacao__1=techchallenge-oficina-billing.fifo`) e a região (`AWS_REGION=us-east-1`). A chave com ponto é válida em ConfigMap e em `envFrom` no EKS 1.36.
+1. ConfigMap `management-api-config` com configurações não sensíveis (`ASPNETCORE_ENVIRONMENT=Production`, `ASPNETCORE_URLS=http://+:8080`), o nível de log do Serilog (`Serilog__MinimumLevel__Default=Information` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore=Warning`), as filas SQS (`SqsSettings__FilaConsumo=techchallenge-oficina-management.fifo` e a lista de publicação, o *fan-out* da ADR-020: `SqsSettings__FilasPublicacao__0=techchallenge-oficina-os-service.fifo`, `SqsSettings__FilasPublicacao__1=techchallenge-oficina-billing.fifo` e `SqsSettings__FilasPublicacao__2=techchallenge-oficina-execution.fifo`) e a região (`AWS_REGION=us-east-1`). A chave com ponto é válida em ConfigMap e em `envFrom` no EKS 1.36.
 2. Secret `oficina-api-secrets`, gerado pelo Kustomize a partir do `k8s/.env` (seção 5).
 3. Deployment com 1 réplica inicial, porta 8080, probes (startup, liveness e readiness) em `/health`, recursos de 100m/128Mi (requests) e 500m/512Mi (limits) e os labels do Datadog (seção 4.4).
 4. Service do tipo NodePort (porta 80 → 8080, com `nodePort` fixo 30080; seção 8).
@@ -110,7 +111,7 @@ O Deployment tem, em `metadata.labels` **e** em `spec.template.metadata.labels`:
 
 O admission controller do Datadog lê esses labels e injeta `DD_ENV` e `DD_SERVICE` nos pods, e o Agent marca logs, métricas e traces com `env:study` e `service:management-api`. São os valores que os monitores e o dashboard filtram ([infra/DATADOG.md](../infra/DATADOG.md)).
 - Os labels **nunca** entram no `spec.selector`, que é imutável.
-- O label `admission.datadoghq.com/enabled` não é necessário: a injeção do tracer (Single Step Instrumentation) já fica restrita aos namespaces `oficina`, `os-service` e `billing` na configuração do Agent.
+- O label `admission.datadoghq.com/enabled` não é necessário: a injeção do tracer (Single Step Instrumentation) já fica restrita aos namespaces `oficina`, `os-service`, `billing` e `execution` na configuração do Agent.
 - O tracer só entra nos pods criados com o Agent rodando. Se o Agent for instalado com a API já no ar, os pods precisam de um rollout restart. O Bootstrap e o Deploy já fazem isso: aplicam o addons antes dos manifests, com restart. Isso vale também ao ligar o Datadog (`DD_ENABLED` de `false` para `true`) pelo Bootstrap.
 - As probes continuam em `/health`. O `/health/ready`, que checa o banco, é usado só pelo `http_check` do Agent: assim, uma queda do banco não tira os pods do Service.
 - Não há `tags.datadoghq.com/version`, porque a imagem usa a tag `latest`.
@@ -119,7 +120,7 @@ O admission controller do Datadog lê esses labels e injeta `DD_ENV` e `DD_SERVI
 O [kustomization.yaml](kustomization.yaml) gera o Secret `oficina-api-secrets` a partir do `k8s/.env`, com as chaves de [.env.example](.env.example):
 - `DatabaseSettings__ConnectionString`: aponta para o RDS criado em [DB/](../../DB/README.md).
 - `ResendSettings__ApiKey`: chave de envio de email (Resend).
-- `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`: chave do usuário IAM `techchallenge-oficina-management-sqs`, que consome a fila da Management e publica nas do OS Service e do Billing ([SQS/README.md](../../SQS/README.md)). O SDK da AWS lê essas variáveis sozinho.
+- `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`: chave do usuário IAM `techchallenge-oficina-management-sqs`, que consome a fila da Management e publica nas do OS Service, do Billing e do Execução e Produção ([SQS/README.md](../../SQS/README.md)). O SDK da AWS lê essas variáveis sozinho.
 
 No CI, o apply dos manifests gera o `kubernetes/k8s/.env`:
 - Descobre o endpoint pelo identifier do RDS (variable `RDS_INSTANCE_IDENTIFIER`, `techchallenge-oficina-postgres`).
@@ -132,11 +133,11 @@ O `k8s/.env` é ignorado pelo Git e nunca deve ser versionado; apenas o `.env.ex
 Como o `kustomization.yaml` usa `disableNameSuffixHash: true`, o nome do Secret não muda quando o conteúdo muda, e o Deployment não reinicia sozinho. O mesmo vale para o ConfigMap: ele é lido via `envFrom` e não tem hash no nome. Por isso, o apply do Bootstrap e do Deploy sempre faz o rollout restart. Depois de trocar a chave do Resend fora do Git, rode o K8s Apply com `restart-pods = true`. Para trocar a senha do RDS, rode o Bootstrap, que aplica a senha nova no RDS (`DB/infra`) e depois os manifests, com restart.
 
 ## 6. Regras de HPA aplicadas
-Foi seguido o requisito informado, com a memória ajustada para o Datadog e o máximo dividido entre as três APIs do cluster:
+Foi seguido o requisito informado, com a memória ajustada para o Datadog e o máximo dividido entre as quatro APIs do cluster:
 1. CPU alvo: 30% de utilização.
 2. Memória alvo: 150% de utilização, ou seja, 192Mi sobre o request de 128Mi. Era 80%, mas o tracer .NET do Datadog (APM) soma memória a cada pod: em repouso, o uso passaria dos 80% (~102Mi), e o HPA escalaria sem carga até faltar espaço nos nodes. Os requests não mudaram. Se, depois do deploy, o HPA ainda escalar sem carga (`kubectl top pods -n oficina` e `kubectl get hpa -n oficina`), deixe só a métrica de CPU.
 3. Mínimo: 1 réplica.
-4. Máximo: 3 réplicas. Era 10 e, com o OS Service, 5. Com o OS Service e o Billing no mesmo cluster (HPA de 1 a 3 em cada repo), as 3 × 3 réplicas mais os 10 pods de sistema (7 do Kubernetes e 3 do Datadog) somam 19, dentro dos 22 pods que cabem nos 2 nodes.
+4. Máximo: 2 réplicas. Era 10; com o OS Service, 5; e, com o Billing, 3. Com o OS Service, o Billing e o Execução e Produção no mesmo cluster (HPA de 1 a 2 em cada repo), as 4 × 2 réplicas mais os 10 pods de sistema (7 do Kubernetes e 3 do Datadog) somam 18, dentro dos 22 pods que cabem nos 2 nodes, com folga para o rollout (seção 6.1).
 
 As métricas vêm do Metrics Server, instalado pelo `kubernetes/infra/addons`.
 
@@ -144,13 +145,14 @@ Aplicado em [features/management-api/hpa.yml](features/management-api/hpa.yml).
 
 ### 6.1 Capacidade do cluster
 O node group tem 2 nodes `t3.small` fixos, com 11 pods por node (22 no total) e cerca de 1,4 GiB alocáveis em cada um.
-- Sem o Datadog, rodam 10 pods (1 de cada uma das três APIs e 7 do próprio Kubernetes). O Datadog soma 3 (um Agent por node e um Cluster Agent): **13 de 22** em regime.
-- No rollout restart de uma API, um pod a mais sobe por um momento: cerca de **14 de 22**.
-- Os requests de memória somam cerca de 1,6 GiB em regime, contra ~2,9 GiB alocáveis. Cada réplica extra de um HPA soma 128Mi: com as três APIs no máximo (3 + 3 + 3 réplicas), são 19 pods e cerca de 2,4 GiB. Cabe, mas apertado: num rollout com muitas réplicas, pods extras podem ficar `Pending`.
+- Sem o Datadog, rodam 11 pods (1 de cada uma das quatro APIs e 7 do próprio Kubernetes). O Datadog soma 3 (um Agent por node e um Cluster Agent): **14 de 22** em regime.
+- No rollout restart de uma API, um pod a mais sobe por um momento: cerca de **15 de 22**.
+- Os requests de memória somam cerca de 1,8 GiB em regime, contra ~2,9 GiB alocáveis. Cada réplica extra de um HPA soma 128Mi: com as quatro APIs no máximo (2 + 2 + 2 + 2 réplicas), são **18 de 22** pods e cerca de 2,3 GiB.
+- No pior caso, um rollout com as quatro APIs no máximo sobe um pod a mais por API por um momento: **22 de 22**, no limite (cerca de 2,8 GiB). Cabe, mas apertado: com qualquer pod a mais, os extras ficam `Pending` até o rollout terminar.
 - Contingência: nodes `t3.medium` (`node_instance_type` da foundation). A troca **substitui o node group** e é disruptiva; faça só numa janela, ou num Destroy/Bootstrap.
 
 ## 7. Namespace
-Todos os recursos desta pasta ficam no namespace `oficina`, definido em [base/namespace.yml](base/namespace.yml) e forçado pelo `namespace` do [kustomization.yaml](kustomization.yaml). O OS Service usa o namespace `os-service`, criado pelos manifests do repo OS-SERVICE, e o Billing, o `billing`, criado pelos do repo BILLING.
+Todos os recursos desta pasta ficam no namespace `oficina`, definido em [base/namespace.yml](base/namespace.yml) e forçado pelo `namespace` do [kustomization.yaml](kustomization.yaml). O OS Service usa o namespace `os-service`, criado pelos manifests do repo OS-SERVICE, o Billing, o `billing`, criado pelos do repo BILLING, e o Execução e Produção, o `execution`, criado pelos do repo EXECUTION.
 
 ## 8. Acesso externo (API Gateway)
 O acesso de fora do cluster é feito pelo Amazon API Gateway (HTTP API `techchallenge-oficina-api`), criado pelo Terraform da foundation ([api-gateway.tf](../infra/foundation/api-gateway.tf) e [nlb.tf](../infra/foundation/nlb.tf)). Não há Ingress nem Ingress Controller.
@@ -158,27 +160,28 @@ O acesso de fora do cluster é feito pelo Amazon API Gateway (HTTP API `techchal
 Caminho de uma requisição: API Gateway → VPC Link → NLB interno → NodePort em qualquer node → Service → pod.
 
 Configuração aplicada:
-1. As rotas `ANY /management/{proxy+}`, `ANY /os/{proxy+}` e `ANY /billing/{proxy+}`, no stage `$default`.
+1. As rotas `ANY /management/{proxy+}`, `ANY /os/{proxy+}`, `ANY /billing/{proxy+}` e `ANY /execution/{proxy+}`, no stage `$default`.
 2. A integração remove o prefixo antes de encaminhar ao backend (`overwrite:path`): `/management/api/clientes` chega à API como `/api/clientes`.
-3. Um Lambda authorizer (repo LAMBDA) protege as rotas das APIs: exige JWT válido do Auth0 com a claim `cpf`, exceto no cadastro de cliente (`POST /management/api/clientes`), que aceita JWT sem `cpf`. O header `Authorization` é repassado e a API valida o JWT de novo. São públicas as rotas `GET /management/health`, `GET /os/health`, `GET /billing/health`, `POST /billing/api/pagamentos/notificacoes` (webhook do Mercado Pago, que não envia o JWT) e `POST /auth/token`, que gera o JWT com `cpf` (Lambda do repo LAMBDA).
-4. Cada API tem um listener e um target group no NLB, na mesma porta do NodePort: `techchallenge-oficina-management` (30080), `techchallenge-oficina-os` (30081) e `techchallenge-oficina-billing` (30082). As portas ficam em `local.api_node_ports` (`management = 30080`, `os = 30081` e `billing = 30082`, em [infra/foundation/locals.tf](../infra/foundation/locals.tf)) e **precisam ser iguais** ao `nodePort` do [service.yml](features/management-api/service.yml) desta pasta e ao dos Services `os-service-api` e `billing-api` dos repos OS-SERVICE e BILLING.
+3. Um Lambda authorizer (repo LAMBDA) protege as rotas das APIs: exige JWT válido do Auth0 com a claim `cpf`, exceto no cadastro de cliente (`POST /management/api/clientes`), que aceita JWT sem `cpf`. O header `Authorization` é repassado e a API valida o JWT de novo. São públicas as rotas `GET /management/health`, `GET /os/health`, `GET /billing/health`, `GET /execution/health`, `POST /billing/api/pagamentos/notificacoes` (webhook do Mercado Pago, que não envia o JWT) e `POST /auth/token`, que gera o JWT com `cpf` (Lambda do repo LAMBDA).
+4. Cada API tem um listener e um target group no NLB, na mesma porta do NodePort: `techchallenge-oficina-management` (30080), `techchallenge-oficina-os` (30081), `techchallenge-oficina-billing` (30082) e `techchallenge-oficina-execution` (30083). As portas ficam em `local.api_node_ports` (`management = 30080`, `os = 30081`, `billing = 30082` e `execution = 30083`, em [infra/foundation/locals.tf](../infra/foundation/locals.tf)) e **precisam ser iguais** ao `nodePort` do [service.yml](features/management-api/service.yml) desta pasta e ao dos Services `os-service-api`, `billing-api` e `execution-api` dos repos OS-SERVICE, BILLING e EXECUTION.
 
 | API | Rota | NodePort | Manifests |
 |---|---|---|---|
 | management-api | `https://<id>.execute-api.us-east-1.amazonaws.com/management/...` | 30080 | Esta pasta |
 | os-service-api | `https://<id>.execute-api.us-east-1.amazonaws.com/os/...` | 30081 | Repo OS-SERVICE |
 | billing-api | `https://<id>.execute-api.us-east-1.amazonaws.com/billing/...` | 30082 | Repo BILLING |
+| execution-api | `https://<id>.execute-api.us-east-1.amazonaws.com/execution/...` | 30083 | Repo EXECUTION |
 
-O endpoint só atende HTTPS. Um prefixo sozinho (`/management` ou `/management/`) responde 404, porque não casa com `{proxy+}`. O Swagger UI da API busca `/swagger/v1/swagger.json` pela raiz, então não abre atrás do prefixo, mas `/management/swagger/v1/swagger.json` funciona (e `/os/swagger/v1/swagger.json` e `/billing/swagger/v1/swagger.json`, no OS Service e no Billing).
+O endpoint só atende HTTPS. Um prefixo sozinho (`/management` ou `/management/`) responde 404, porque não casa com `{proxy+}`. O Swagger UI da API busca `/swagger/v1/swagger.json` pela raiz, então não abre atrás do prefixo, mas `/management/swagger/v1/swagger.json` funciona (e `/os/swagger/v1/swagger.json`, `/billing/swagger/v1/swagger.json` e `/execution/swagger/v1/swagger.json`, no OS Service, no Billing e no Execução e Produção).
 
 Checklist de confirmação, com o ambiente criado:
 1. URL da API: output `api_gateway_endpoint` da foundation, ou `aws apigatewayv2 get-apis --query "Items[?Name=='techchallenge-oficina-api'].ApiEndpoint" --output text`.
-2. Health das APIs: `curl.exe -i "<endpoint>/management/health"` → 200; `curl.exe -i "<endpoint>/os/health"` e `curl.exe -i "<endpoint>/billing/health"` → 200 depois dos Bootstraps dos repos OS-SERVICE e BILLING.
+2. Health das APIs: `curl.exe -i "<endpoint>/management/health"` → 200; `curl.exe -i "<endpoint>/os/health"`, `curl.exe -i "<endpoint>/billing/health"` e `curl.exe -i "<endpoint>/execution/health"` → 200 depois dos Bootstraps dos repos OS-SERVICE, BILLING e EXECUTION.
 3. Autenticação passando pelo gateway, em `curl.exe -i "<endpoint>/management/api/clientes"`:
    - 401 sem token;
    - 403 com o token direto do Auth0 (sem `cpf`);
    - 200 com o JWT gerado pela Lambda (`POST <endpoint>/auth/token` com `{"email","senha","cpf"}`, detalhes no README do repo [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658)).
-4. Target groups `techchallenge-oficina-management`, `techchallenge-oficina-os` e `techchallenge-oficina-billing` `healthy` no console do EC2 (Target Groups). Os dois últimos só ficam `healthy` depois dos Bootstraps dos repos OS-SERVICE e BILLING.
+4. Target groups `techchallenge-oficina-management`, `techchallenge-oficina-os`, `techchallenge-oficina-billing` e `techchallenge-oficina-execution` `healthy` no console do EC2 (Target Groups). Os três últimos só ficam `healthy` depois dos Bootstraps dos repos OS-SERVICE, BILLING e EXECUTION.
 
 ## 9. Validação
 Para validar os manifests sem acessar a AWS, a partir da raiz do monorepo:

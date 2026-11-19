@@ -1,9 +1,9 @@
 # RFC-004: Comunicação entre microsserviços
 
-> Uma RFC (Request for Comments) é uma proposta escrita: apresenta um problema, compara as opções e recomenda uma, para que a decisão seja discutida antes de ser adotada. As RFCs e ADRs são numeradas em sequência única entre este monorepo e os repositórios [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O índice está no [docs/arquitetura.md](../arquitetura.md#5-decisões-de-arquitetura-rfcs-e-adrs).
+> Uma RFC (Request for Comments) é uma proposta escrita: apresenta um problema, compara as opções e recomenda uma, para que a decisão seja discutida antes de ser adotada. As RFCs e ADRs são numeradas em sequência única entre este monorepo e os repositórios [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O índice está no [docs/arquitetura.md](../arquitetura.md#5-decisões-de-arquitetura-rfcs-e-adrs).
 
-- **Status**: Aceita (com a atualização da seção 8, na entrada do Billing)
-- **Partes afetadas**: neste monorepo, `server/` (mensageria), `SQS/` (filas) e as pipelines; fora dele, os repos OS-SERVICE e BILLING, que publicam e consomem os mesmos eventos
+- **Status**: Aceita (com as atualizações da seção 8, na entrada do Billing, e da seção 9, na entrada do Execução e Produção)
+- **Partes afetadas**: neste monorepo, `server/` (mensageria), `SQS/` (filas) e as pipelines; fora dele, os repos OS-SERVICE, BILLING e EXECUTION, que publicam e consomem os mesmos eventos
 - **Resultado**: Amazon SQS FIFO, com uma fila de entrada por serviço e uma saga coreografada. A decisão está registrada na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)
 
 ## 1. Resumo
@@ -80,11 +80,11 @@ O envelope, a lista de eventos, a idempotência e as credenciais estão na ADR-0
 | A fila entrega pelo menos uma vez: o mesmo evento pode chegar de novo depois de uma falha | Consumidores idempotentes: evento repetido, transição fora de ordem e OS desconhecida são ignorados (`evento.ignorado`) |
 | Uma mensagem com erro segura as próximas da mesma OS (FIFO) | Depois de 5 recebimentos (cerca de 5 min, com o *visibility timeout* de 60 s), ela vai para a DLQ e libera as próximas. A DLQ é analisada e reprocessada manualmente |
 | Consistência eventual: logo depois de abrir a OS, os outros serviços ainda podem não conhecê-la | Gerar o orçamento responde 404 até o evento chegar (desde a seção 8, no Billing); basta tentar de novo em alguns segundos (a collection do Postman espera entre os passos) |
-| Um novo serviço interessado nos mesmos eventos (por exemplo, faturamento ou execução) | Aconteceu com o Billing: uma fila a mais e *fan-out* no publicador, sem mudar os consumidores atuais (seção 8). O tópico SNS FIFO, previsto aqui como evolução, não foi usado |
+| Um novo serviço interessado nos mesmos eventos (por exemplo, faturamento ou execução) | Aconteceu com o Billing (seção 8) e com o Execução e Produção (seção 9): uma fila a mais e *fan-out* no publicador. O tópico SNS FIFO, previsto aqui como evolução, não foi usado |
 
 ## 7. Resultado
 
-Aceita e implementada. As filas estão em [SQS/](../../SQS/README.md), e a camada de mensageria fica em `server/` (projeto `TechChallenge.Oficina.Messaging`) e nos repos OS-SERVICE e BILLING. A decisão, com o envelope, os eventos, a saga e as credenciais, está na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
+Aceita e implementada. As filas estão em [SQS/](../../SQS/README.md), e a camada de mensageria fica em `server/` (projeto `TechChallenge.Oficina.Messaging`) e nos repos OS-SERVICE, BILLING e EXECUTION. A decisão, com o envelope, os eventos, a saga e as credenciais, está na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
 
 ## 8. Atualização: entrada do Billing
 
@@ -96,3 +96,9 @@ Com três serviços, o mesmo evento passou a interessar a mais de um serviço (p
 - a permissão continua por fila: o usuário IAM de cada serviço só publica nas filas de que precisa.
 
 O preço é que quem publica precisa conhecer as filas de destino, e a publicação em duas filas pode ser parcial (os consumidores idempotentes absorvem a repetição). Os eventos novos, `OrdemServicoValidada` e `PagamentoAprovado`, estão na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
+
+## 9. Atualização: entrada do Execução e Produção
+
+Depois, a fila de produção da oficina (diagnóstico e execução) foi para o Execução e Produção, um quarto serviço com banco próprio ([ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md)). Ele entrou com o mesmo modelo desta RFC: uma fila FIFO de entrada (`techchallenge-oficina-execution.fifo`), com DLQ e usuário IAM próprios, e a mesma saga coreografada. Ele não muda o status da OS: avisa o OS Service pelos eventos `DiagnosticoIniciado` e `ExecucaoFinalizada`.
+
+O *fan-out* no publicador continuou, com uma regra mais estreita: cada serviço publica só nas filas dos serviços que consomem algum evento dele. Por isso, o Execução e Produção publica só na fila do OS Service, e o Billing não publica na fila dele. O SNS continuou de fora, pelos motivos da seção 8. Os detalhes estão na [ADR-020](../adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).

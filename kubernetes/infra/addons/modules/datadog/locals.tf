@@ -1,10 +1,11 @@
 locals {
   # Prefixo da rota no API Gateway -> service no Datadog (nome do Deployment em kubernetes/k8s/features
-  # deste repo e dos repos OS-SERVICE e BILLING).
+  # deste repo e dos repos OS-SERVICE, BILLING e EXECUTION).
   services = {
     management = "management-api"
     os         = "os-service-api"
     billing    = "billing-api"
+    execution  = "execution-api"
   }
 
   common_tags = [

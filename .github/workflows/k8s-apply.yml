@@ -2,8 +2,8 @@ name: K8s Apply
 # Reaplica os manifests (kubernetes/k8s/) no EKS e, por padrão, reinicia a API.
 # Requer o ambiente de pé (Bootstrap) e a imagem no ECR. Útil depois de trocar RESEND_API_KEY
 # (para trocar RDS_PASSWORD, rode o Bootstrap: a senha nova também precisa ser aplicada no RDS).
-# Só atualiza a Management API: os repos OS-SERVICE e BILLING têm o próprio K8s Apply (rode-os, por exemplo,
-# depois que as chaves do SQS forem recriadas aqui).
+# Só atualiza a Management API: os repos OS-SERVICE, BILLING e EXECUTION têm o próprio K8s Apply (rode-os, por
+# exemplo, depois que as chaves do SQS forem recriadas aqui).
 
 on:
   workflow_dispatch:

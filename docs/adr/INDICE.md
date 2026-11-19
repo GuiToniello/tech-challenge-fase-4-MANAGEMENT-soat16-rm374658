@@ -25,12 +25,15 @@ A visão geral da arquitetura (diagramas de componentes e de sequência) e o ín
 19. [ADR-020: Eventos com Amazon SQS e Saga Coreografada](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)
 20. [ADR-021: Billing Service, Orçamento e Pagamentos com Banco Próprio](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) (repo BILLING)
 21. [ADR-022: Pagamentos com Mercado Pago](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md) (repo BILLING)
+22. [ADR-023: Execução e Produção, Fila de Execução e Status por Eventos](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) (repo EXECUTION)
 
 Com a entrada do Billing (fase 4), foram atualizadas a ADR-004, a ADR-011, a ADR-012, a ADR-014, a ADR-015, a ADR-016, a ADR-017, a ADR-018 e a ADR-020, além da RFC-004: o orçamento saiu da Management, o débito de estoque passou para o pagamento aprovado, as filas passaram a ser três, com *fan-out* no publicador, e o HPA de cada API ficou de 1 a 3 pods.
 
+Com a entrada do Execução e Produção (fase 4), foram atualizadas a ADR-004, a ADR-014, a ADR-015, a ADR-016, a ADR-017, a ADR-018 e a ADR-020, além da RFC-004 (e, nos repos OS-SERVICE e BILLING, a ADR-019 e a ADR-021): o diagnóstico e a finalização deixaram de ser rotas do OS Service e passaram a chegar a ele por eventos, as filas passaram a ser quatro, cada serviço publica só nas filas de quem consome algum evento dele, e o HPA de cada API ficou de 1 a 2 pods.
+
 ### RFCs
 
-A numeração das ADRs e RFCs é compartilhada entre este monorepo e os repositórios OS-SERVICE, BILLING e LAMBDA. As RFCs deste monorepo ficam em `docs/rfc/`; a ADR-019 fica no repo OS-SERVICE, a ADR-021 e a ADR-022, no repo BILLING, e a RFC-003, no repo LAMBDA:
+A numeração das ADRs e RFCs é compartilhada entre este monorepo e os repositórios OS-SERVICE, BILLING, EXECUTION e LAMBDA. As RFCs deste monorepo ficam em `docs/rfc/`; a ADR-019 fica no repo OS-SERVICE, a ADR-021 e a ADR-022, no repo BILLING, a ADR-023, no repo EXECUTION, e a RFC-003, no repo LAMBDA:
 
 - [RFC-001: Escolha da nuvem](../rfc/RFC-001-Escolha-da-Nuvem.md)
 - [RFC-002: Escolha do banco de dados](../rfc/RFC-002-Escolha-do-Banco-de-Dados.md)
@@ -55,19 +58,20 @@ A numeração das ADRs e RFCs é compartilhada entre este monorepo e os reposit�
 - **ADR-007**: EF Core + PostgreSQL com migrations versionadas
 - **ADR-009**: Migrações automáticas no startup
 - **ADR-017**: PostgreSQL no Amazon RDS, com justificativa formal, diagrama ER e relacionamentos do banco da Management (sem as tabelas de OS e de orçamento desde a fase 4)
-- **ADR-019** e **ADR-021**: Um banco por serviço: o OS Service e o Billing têm o próprio RDS (repos OS-SERVICE e BILLING)
+- **ADR-019**, **ADR-021** e **ADR-023**: Um banco por serviço: o OS Service, o Billing e o Execução e Produção têm o próprio RDS (repos OS-SERVICE, BILLING e EXECUTION)
 
 ### Contexto de Comunicação entre Componentes
 - **ADR-015**: Comunicação síncrona (HTTP/REST) dos clientes com as APIs, com entrada única pelo API Gateway e sem chamadas HTTP entre as APIs
-- **ADR-020**: Entre os serviços, eventos em filas Amazon SQS FIFO, com *fan-out* no publicador, e saga coreografada com compensação (opções comparadas na RFC-004)
+- **ADR-020**: Entre os serviços, eventos em filas Amazon SQS FIFO, com *fan-out* no publicador para as filas de quem consome os eventos, e saga coreografada com compensação (opções comparadas na RFC-004)
 
 ### Contexto de Escalabilidade
-- **ADR-016**: HPA de cada API, de 1 a 3 pods conforme CPU e memória, com os nós do cluster fixos
+- **ADR-016**: HPA de cada API, de 1 a 2 pods conforme CPU e memória, com os nós do cluster fixos
 
 ### Contexto de Organização do Repositório e dos Serviços
 - **ADR-018**: Monorepo com a aplicação, o banco e o cluster (antes os repositórios APP, DB e K8S), pipelines unificadas e uma só API neste monorepo, a Management API
 - **ADR-019**: O ciclo de vida da OS e os indicadores num microsserviço próprio, o OS Service, com repositório, banco, namespace e pipelines próprios (repo OS-SERVICE)
 - **ADR-021**: O orçamento e o pagamento num microsserviço próprio, o Billing, com repositório, banco, namespace e pipelines próprios (repo BILLING)
+- **ADR-023**: A fila de produção, o diagnóstico e a execução num microsserviço próprio, o Execução e Produção, com repositório, banco, namespace e pipelines próprios; o status da OS continua no OS Service, que o muda por eventos (repo EXECUTION)
 
 ### Contexto de Exposição da API
 - **ADR-008**: Swagger para documentação auto-atualizada
@@ -85,4 +89,4 @@ A numeração das ADRs e RFCs é compartilhada entre este monorepo e os reposit�
 - **ADR-013**: Tratamento de erros esperados na borda (endpoints + adapters/controllers da arquitetura) e erros inesperados no middleware global
 
 ### Contexto de Observabilidade
-- **ADR-014**: Logs JSON no stdout (Serilog) com eventos de negócio, APM injetado no cluster e métricas, monitores e dashboard no Datadog, para as três APIs
+- **ADR-014**: Logs JSON no stdout (Serilog) com eventos de negócio, APM injetado no cluster e métricas, monitores e dashboard no Datadog, para as quatro APIs

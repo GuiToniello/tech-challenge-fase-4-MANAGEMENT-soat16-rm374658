@@ -1,12 +1,12 @@
 # ADR-015: Comunicação Síncrona (HTTP/REST) via API Gateway
 
-**Status**: Aceita (atualizada na fase 4, ver [ADR-018](ADR-018-Monorepo-e-API-Unica-Management.md), [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) e [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md); o item 7 foi superado pela [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md))
+**Status**: Aceita (atualizada na fase 4, ver [ADR-018](ADR-018-Monorepo-e-API-Unica-Management.md), [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) e [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) e [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md); o item 7 foi superado pela [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md))
 
 **Resumo**:
-Os clientes falam com as APIs de forma **síncrona**: quem chama espera a resposta na hora. As chamadas usam HTTPS, no estilo REST e com JSON, sempre pela mesma porta de entrada, o Amazon API Gateway. Até a fase 3, havia uma só API e nenhuma fila. Na fase 4, o ciclo de vida da OS foi para um segundo serviço, o OS Service, o orçamento e o pagamento, para um terceiro, o Billing, e a comunicação **entre os serviços** passou a ser por eventos no Amazon SQS ([ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)). Para os clientes, nada muda. O desenho geral está no [diagrama de componentes](../arquitetura.md#2-diagrama-de-componentes).
+Os clientes falam com as APIs de forma **síncrona**: quem chama espera a resposta na hora. As chamadas usam HTTPS, no estilo REST e com JSON, sempre pela mesma porta de entrada, o Amazon API Gateway. Até a fase 3, havia uma só API e nenhuma fila. Na fase 4, o ciclo de vida da OS foi para um segundo serviço, o OS Service, o orçamento e o pagamento, para um terceiro, o Billing, a fila de produção (diagnóstico e execução), para um quarto, o Execução e Produção, e a comunicação **entre os serviços** passou a ser por eventos no Amazon SQS ([ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)). Para os clientes, nada muda. O desenho geral está no [diagrama de componentes](../arquitetura.md#2-diagrama-de-componentes).
 
 **Contexto**:
-O sistema tem três APIs .NET no Amazon EKS (a Management API e, desde a fase 4, o OS Service e o Billing, dos repos OS-SERVICE e BILLING), as Lambdas de autenticação (repo LAMBDA), um banco PostgreSQL no Amazon RDS para cada API e quatro serviços externos: Auth0, Resend, Mercado Pago e Datadog. Era preciso definir:
+O sistema tem quatro APIs .NET no Amazon EKS (a Management API e, desde a fase 4, o OS Service, o Billing e o Execução e Produção, dos repos OS-SERVICE, BILLING e EXECUTION), as Lambdas de autenticação (repo LAMBDA), um banco PostgreSQL no Amazon RDS para cada API e quatro serviços externos: Auth0, Resend, Mercado Pago e Datadog. Era preciso definir:
 - como os clientes chegam às APIs;
 - como as partes internas trocam dados entre si;
 - como o sistema fala com os serviços externos.
@@ -20,11 +20,11 @@ Fatores de decisão:
 **Decisão**:
 
 1. **Clientes → APIs: HTTP síncrono, estilo REST, com JSON.**
-   - As APIs usam Minimal APIs do ASP.NET Core. Cada ação é uma rota, como `POST /api/clientes` (Management API), `POST /api/ordens-servico` (OS Service) ou `POST /api/pagamentos/{ordemServicoId}/verificar` (Billing).
+   - As APIs usam Minimal APIs do ASP.NET Core. Cada ação é uma rota, como `POST /api/clientes` (Management API), `POST /api/ordens-servico` (OS Service), `POST /api/pagamentos/{ordemServicoId}/verificar` (Billing) ou `POST /api/execucoes/{ordemServicoId}/finalizar` (Execução e Produção).
    - As respostas usam os códigos HTTP para dizer o que aconteceu (201, 400, 404 etc.), como define a ADR-013.
 
 2. **Uma única entrada: o Amazon API Gateway (HTTP API), só com HTTPS.**
-   - Cada API tem um prefixo: `/management` (Management API), `/os` (OS Service) e `/billing` (Billing). O gateway remove o prefixo antes de encaminhar: `/management/api/...` chega à Management API como `/api/...`.
+   - Cada API tem um prefixo: `/management` (Management API), `/os` (OS Service), `/billing` (Billing) e `/execution` (Execução e Produção). O gateway remove o prefixo antes de encaminhar: `/management/api/...` chega à Management API como `/api/...`.
    - `POST /auth/token` vai para a Lambda que devolve o JWT (emitido pelo Auth0).
    - O webhook do Mercado Pago (`POST /billing/api/pagamentos/notificacoes`) é uma rota pública, sem o authorizer, com integração própria, porque o Mercado Pago não envia o JWT ([ADR-022](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)).
    - As APIs não ficam expostas direto na internet. O caminho até os pods passa por um VPC Link e por um balanceador interno (NLB), detalhado no [kubernetes/infra/ESTRUTURA.md](../../kubernetes/infra/ESTRUTURA.md).
@@ -33,7 +33,7 @@ Fatores de decisão:
 
 4. **Sem chamadas HTTP entre as APIs.**
    - Na fase 3, as APIs não chamavam umas às outras: compartilhavam o mesmo banco. No começo da fase 4, as 4 APIs dedicadas foram removidas, porque só repetiam rotas da Management API ([ADR-018](ADR-018-Monorepo-e-API-Unica-Management.md)).
-   - Depois, o ciclo de vida da OS foi extraído para o OS Service, com banco próprio ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)), e o orçamento, para o Billing, também com banco próprio (ADR-021). As três APIs continuam sem chamadas HTTP entre si: trocam eventos pelo SQS (ADR-020), e nenhuma lê o banco da outra.
+   - Depois, o ciclo de vida da OS foi extraído para o OS Service, com banco próprio ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)), o orçamento, para o Billing, e a fila de produção, para o Execução e Produção, também com banco próprio (ADR-021 e ADR-023). As quatro APIs continuam sem chamadas HTTP entre si: trocam eventos pelo SQS (ADR-020), e nenhuma lê o banco da outra.
    - A Lambda `buscar-cliente` (repo LAMBDA) só consulta o banco da Management para conferir o CPF.
 
 5. **Entre as Lambdas: chamada síncrona.** A Lambda que devolve o token (`issue-token`) chama a Lambda que consulta o banco (`buscar-cliente`) pela API da própria AWS Lambda (`Invoke`) e espera a resposta. A divisão em duas funções evita um NAT Gateway, que é cobrado por hora (RFC-003).
@@ -45,8 +45,8 @@ Fatores de decisão:
 **Consequências**:
 - ✅ Fácil de entender, testar (Postman) e investigar: cada pedido tem uma resposta imediata, e o trace do Datadog mostra o caminho dentro da API (ADR-014).
 - ✅ Menos peças para pagar e operar: sem servidor de mensagens, sem Ingress Controller e sem balanceador público. As filas da fase 4 são do SQS, gerenciado pela AWS e dentro do nível gratuito.
-- ✅ Uma só porta de entrada concentra o HTTPS, o roteamento e a autenticação, para as três APIs.
-- ✅ Sem chamadas HTTP entre os serviços: a Management API e a Lambda `buscar-cliente` usam o mesmo banco, e o OS Service e o Billing falam com a Management só por eventos.
+- ✅ Uma só porta de entrada concentra o HTTPS, o roteamento e a autenticação, para as quatro APIs.
+- ✅ Sem chamadas HTTP entre os serviços: a Management API e a Lambda `buscar-cliente` usam o mesmo banco, e o OS Service, o Billing e o Execução e Produção trocam com os outros serviços só eventos.
 - ⚠ **Dependência em tempo real:** se o banco ou um serviço externo estiver fora do ar, a requisição falha na hora. Exemplo: no Billing, o envio do orçamento por e-mail responde 500 se o Resend falhar (ADR-011), e aprovar o orçamento depende do Mercado Pago (ADR-022). Entre os serviços, a fila absorve a indisponibilidade (ADR-020).
 - ⚠ **Acoplamento pelo banco:** a Management API aplica as migrations ao subir (ADR-009), e uma mudança na tabela de clientes também afeta a Lambda `buscar-cliente`. O banco também é um ponto único de falha para a Management API e para a emissão do token.
 - ⚠ **Latência somada:** cada requisição passa pelo Lambda authorizer, sem cache (a decisão depende da rota), e pela rede interna até o pod.
@@ -77,3 +77,4 @@ Fatores de decisão:
 - **ADR-019**: o OS Service, com banco próprio (repo OS-SERVICE): [ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md).
 - **ADR-020**: eventos no SQS e saga coreografada entre os serviços: [ADR-020](ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
 - **ADR-021** e **ADR-022**: o Billing, com banco próprio, e o pagamento pelo Mercado Pago (repo BILLING): [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) e [ADR-022](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md).
+- **ADR-023**: o Execução e Produção, com banco próprio (repo EXECUTION): [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md).

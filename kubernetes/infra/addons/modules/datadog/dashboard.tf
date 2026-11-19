@@ -2,7 +2,7 @@
 # e os logs de erro. As queries de metrica usam a template variable $env.
 resource "datadog_dashboard" "this" {
   title       = "[oficina] Observabilidade das APIs"
-  description = "Ordens de servico, APIs, Kubernetes e disponibilidade das APIs da oficina (Management, OS Service e Billing). Gerenciado pelo Terraform (kubernetes/infra/addons/modules/datadog do monorepo MANAGEMENT): alteracoes feitas na UI sao sobrescritas."
+  description = "Ordens de servico, APIs, Kubernetes e disponibilidade das 4 APIs da oficina (Management, OS Service, Billing e Execucao e Producao). Gerenciado pelo Terraform (kubernetes/infra/addons/modules/datadog do monorepo MANAGEMENT): alteracoes feitas na UI sao sobrescritas."
   layout_type = "ordered"
   reflow_type = "auto"
 

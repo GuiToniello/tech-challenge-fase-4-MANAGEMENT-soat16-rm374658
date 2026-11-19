@@ -17,7 +17,8 @@
       retries: 5
     restart: unless-stopped
 
-  # SQS local (filas FIFO definidas em elasticmq.conf) para a troca de eventos com o OS Service e o Billing
+  # SQS local (filas FIFO definidas em elasticmq.conf) para a troca de eventos com o OS Service, o Billing
+  # e o Execução e Produção (os outros composes usam este ElasticMQ como broker compartilhado da saga local)
   elasticmq:
     image: docker.io/softwaremill/elasticmq-native:1.6.14
     container_name: oficina-elasticmq
@@ -47,9 +48,10 @@
       DatabaseSettings__ConnectionString: ${DATABASE_CONNECTION_STRING:-Host=postgres;Port=5432;Database=oficina;Username=sa;Password=P@ssw0rd123}
       ResendSettings__ApiKey: ${RESEND_API_KEY}
       SqsSettings__FilaConsumo: ${SQS_FILA_CONSUMO:-techchallenge-oficina-management.fifo}
-      # Fan-out: o mesmo evento vai para as filas do OS Service e do Billing, nesta ordem
+      # Fan-out: o mesmo evento vai para as filas do OS Service, do Billing e do Execução e Produção, nesta ordem
       SqsSettings__FilasPublicacao__0: ${SQS_FILA_PUBLICACAO_OS_SERVICE:-techchallenge-oficina-os-service.fifo}
       SqsSettings__FilasPublicacao__1: ${SQS_FILA_PUBLICACAO_BILLING:-techchallenge-oficina-billing.fifo}
+      SqsSettings__FilasPublicacao__2: ${SQS_FILA_PUBLICACAO_EXECUTION:-techchallenge-oficina-execution.fifo}
       SqsSettings__ServiceUrl: ${SQS_SERVICE_URL:-http://elasticmq:9324}
       # Credenciais ficticias para o ElasticMQ (nao valida assinatura); fixas para nunca herdar credenciais AWS reais do shell
       AWS_ACCESS_KEY_ID: local

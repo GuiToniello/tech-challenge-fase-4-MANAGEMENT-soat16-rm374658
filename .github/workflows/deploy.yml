@@ -1,7 +1,8 @@
 name: Deploy
 # PR: valida tudo. Push na main: aplica só o que mudou neste repo, na ordem.
-# Os repos OS-SERVICE e BILLING usam o cluster, o API Gateway e as filas SQS daqui: se um push recriar o ambiente,
-# rode depois os Bootstraps deles e o Deploy do repo LAMBDA (ordem: este → OS-SERVICE e BILLING → LAMBDA).
+# Os repos OS-SERVICE, BILLING e EXECUTION usam o cluster, o API Gateway e as filas SQS daqui: se um push recriar o
+# ambiente, rode depois os Bootstraps deles e o Deploy do repo LAMBDA
+# (ordem: este → OS-SERVICE → EXECUTION, com o BILLING a qualquer momento depois deste → LAMBDA).
 
 on:
   pull_request:

@@ -3,9 +3,9 @@
 As pipelines deste monorepo cuidam de tudo que ficava em três repositórios na fase 3, mais as filas da fase 4:
 
 - **Aplicação** (`server/`): build e testes, além da imagem da Management API no ECR, que é criado manualmente.
-- **Cluster e borda** (`kubernetes/`): VPC, EKS, API Gateway (com as rotas `/management`, `/os` e `/billing` e o webhook do Mercado Pago), NLB, addons e manifests.
+- **Cluster e borda** (`kubernetes/`): VPC, EKS, API Gateway (com as rotas `/management`, `/os`, `/billing` e `/execution` e o webhook do Mercado Pago), NLB, addons e manifests.
 - **Banco** (`DB/`): o RDS PostgreSQL da Management.
-- **Filas** (`SQS/`): as filas Amazon SQS FIFO entre a Management, o OS Service e o Billing, os usuários IAM e as chaves no SSM Parameter Store.
+- **Filas** (`SQS/`): as filas Amazon SQS FIFO entre a Management, o OS Service, o Billing e o Execução e Produção, os usuários IAM e as chaves no SSM Parameter Store.
 
 A ordem entre as partes, que antes era manual entre repositórios, agora é feita com `needs` entre jobs.
 
@@ -23,9 +23,9 @@ A ordem entre as partes, que antes era manual entre repositórios, agora é feit
 
 > Convenção: workflows que começam com `_` são internos e são chamados com `uses: ./.github/workflows/_x.yml`.
 
-**Ordem com os repositórios OS-SERVICE, BILLING e LAMBDA**, que são separados:
-- **Para subir:** Bootstrap deste repo → Bootstraps do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) e do [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), em qualquer ordem (um não depende do outro) → Deploy do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O OS-SERVICE e o BILLING usam a VPC, o EKS, as rotas `/os` e `/billing` e as filas criados aqui; as Lambdas usam a VPC e o RDS.
-- **Para derrubar:** Destroy do LAMBDA, do OS-SERVICE e do BILLING, em qualquer ordem → Destroy deste repo.
+**Ordem com os repositórios OS-SERVICE, BILLING, EXECUTION e LAMBDA**, que são separados:
+- **Para subir:** Bootstrap deste repo → Bootstrap do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) → Bootstrap do [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) (o OS Service precisa consumir os eventos novos, `DiagnosticoIniciado` e `ExecucaoFinalizada`, antes de o Execução e Produção publicá-los); o do [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658) roda a qualquer momento depois deste → Deploy do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658). O OS-SERVICE, o BILLING e o EXECUTION usam a VPC, o EKS, as rotas `/os`, `/billing` e `/execution` e as filas criados aqui; as Lambdas usam a VPC e o RDS.
+- **Para derrubar:** Destroy do LAMBDA, do OS-SERVICE, do BILLING e do EXECUTION, em qualquer ordem → Destroy deste repo.
 
 ## 1. Workflows reutilizáveis
 
@@ -95,7 +95,7 @@ A ordem entre as partes, que antes era manual entre repositórios, agora é feit
   5. `build-push`;
   6. `k8s-apply` (com restart), depois do `build-push` e do `terraform-sqs`.
 
-Use na primeira criação, para recriar o ambiente depois de um Destroy ou para reaplicar a HEAD da `main`. É também o jeito de aplicar uma troca das variables `DD_ENABLED` ou `DD_SYNTHETICS_STATUS`. Depois dele, rode os Bootstraps dos repos OS-SERVICE e BILLING (em qualquer ordem) e o Deploy do repo LAMBDA.
+Use na primeira criação, para recriar o ambiente depois de um Destroy ou para reaplicar a HEAD da `main`. É também o jeito de aplicar uma troca das variables `DD_ENABLED` ou `DD_SYNTHETICS_STATUS`. Depois dele, rode os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
 
 ## 3. `deploy.yml`
 
@@ -118,8 +118,8 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
   - um push em `kubernetes/infra/**` com o ambiente desligado recria o cluster do zero;
   - um push em `server/**` com o ambiente desligado publica a imagem, mas o `apply-k8s` falha porque não há cluster;
   - um push em `SQS/infra/**` com o ambiente desligado recria as filas, os usuários e as chaves (sem custo relevante), e o `apply-k8s` falha porque não há cluster.
-- **Chave do SQS recriada:** o `apply-k8s` daqui atualiza só o Secret da Management. Rode o K8s Apply dos repos OS-SERVICE e BILLING para os dois serviços receberem a chave nova.
-- **Ambiente recriado por um push:** os repos OS-SERVICE e BILLING usam o cluster, o API Gateway e as filas daqui. Depois, rode os Bootstraps deles e o Deploy do repo LAMBDA.
+- **Chave do SQS recriada:** o `apply-k8s` daqui atualiza só o Secret da Management. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION para os três serviços receberem a chave nova.
+- **Ambiente recriado por um push:** os repos OS-SERVICE, BILLING e EXECUTION usam o cluster, o API Gateway e as filas daqui. Depois, rode os Bootstraps deles, na ordem do começo deste README, e o Deploy do repo LAMBDA.
 - **Não use "Re-run" em um Deploy antigo:** ele reaplicaria a infra e publicaria `latest` de um commit antigo. Para reaplicar a HEAD, use o Bootstrap.
 - **Mudanças só no `deploy.yml`** não aplicam nada. Se precisar, rode o Bootstrap ou o K8s Apply.
 
@@ -133,7 +133,8 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
 | `lambda-check` | `confirm` = `destroy` na `main` | **Falha** se o SG `techchallenge-oficina-lambda-sg` (Lambda do repo LAMBDA na VPC) ainda existir. Rode antes o Destroy do LAMBDA |
 | `os-service-check` | `confirm` = `destroy` na `main` | **Falha** se o RDS `techchallenge-oficina-os-postgres` ou o SG `techchallenge-oficina-os-rds-sg` (repo OS-SERVICE) ainda existirem: o RDS fica nas subnets privadas, e o SG referencia o SG dos nodes. Rode antes o Destroy do OS-SERVICE |
 | `billing-check` | `confirm` = `destroy` na `main` | **Falha** se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` (repo BILLING) ainda existirem, pelo mesmo motivo. Rode antes o Destroy do BILLING |
-| `gate` | depois do `lambda-check`, do `os-service-check` e do `billing-check` | `environment: destroy`: aprovação manual. É um job à parte porque um job com `uses:` não aceita `environment` |
+| `execution-check` | `confirm` = `destroy` na `main` | **Falha** se o RDS `techchallenge-oficina-execution-postgres` ou o SG `techchallenge-oficina-execution-rds-sg` (repo EXECUTION) ainda existirem, pelo mesmo motivo. Rode antes o Destroy do EXECUTION |
+| `gate` | depois dos quatro checks (`lambda-check`, `os-service-check`, `billing-check` e `execution-check`) | `environment: destroy`: aprovação manual. É um job à parte porque um job com `uses:` não aceita `environment` |
 | `terraform-destroy-sqs` | depois do `gate` | Destroy do `SQS/infra`: filas, DLQs, usuários IAM e parâmetros do SSM. Roda em paralelo com o do DB |
 | `terraform-destroy-db` | depois do `gate` | Destroy do `DB/infra`. **Os dados do RDS são perdidos** |
 | `terraform-destroy-addons` | depois do DB | Destroy do `kubernetes/infra/addons`: Metrics Server, Datadog Agent e recursos do Datadog |
@@ -150,7 +151,7 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
 - **Quando usar:**
   - depois de trocar `RESEND_API_KEY`;
   - para reiniciar a API sem passar pelo Deploy.
-- Só atualiza a Management API. Os repos OS-SERVICE e BILLING têm o próprio K8s Apply (por exemplo, para receberem a chave nova do SQS).
+- Só atualiza a Management API. Os repos OS-SERVICE, BILLING e EXECUTION têm o próprio K8s Apply (por exemplo, para receberem a chave nova do SQS).
 - **Para trocar `RDS_PASSWORD`, use o Bootstrap, não o K8s Apply.** A senha nova precisa ser aplicada no RDS (`DB/infra`) antes de ir para o Secret. Depois rode o Deploy do repo LAMBDA.
 - Mudanças no spec do Deployment (imagem, recursos, probes) já fazem rollout sozinhas.
 

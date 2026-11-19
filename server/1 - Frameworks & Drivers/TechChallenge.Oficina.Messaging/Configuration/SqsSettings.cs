@@ -7,7 +7,7 @@ public sealed class SqsSettings
     // Fila FIFO consumida pelo Management (eventos publicados pelo OS Service e pelo Billing); vazia desliga o consumidor
     public string FilaConsumo { get; set; } = string.Empty;
 
-    // Filas FIFO de destino dos eventos publicados pelo Management (OS Service e Billing): o mesmo envelope vai para cada fila, na ordem da lista
+    // Filas FIFO de destino dos eventos publicados pelo Management (OS Service, Billing e Execucao e Producao): o mesmo envelope vai para cada fila, na ordem da lista
     public List<string> FilasPublicacao { get; set; } = [];
 
     // Endpoint alternativo (ex.: ElasticMQ local); vazio usa o endpoint da AWS da regiao configurada

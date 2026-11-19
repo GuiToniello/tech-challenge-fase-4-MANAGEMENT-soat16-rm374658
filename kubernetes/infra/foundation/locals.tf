@@ -8,14 +8,16 @@ locals {
   availability_zones = slice(data.aws_availability_zones.available.names, 0, 2)
 
   # NodePort de cada API (tambem porta do listener e do target group no NLB). A chave vira o
-  # prefixo da rota no API Gateway (/management/..., /os/..., /billing/...) e o sufixo do target group.
-  # Precisa ser igual ao nodePort do service.yml da API: kubernetes/k8s/features/management-api/
-  # (este repo), kubernetes/k8s/features/os-service-api/ (repo OS-SERVICE) e
-  # kubernetes/k8s/features/billing-api/ (repo BILLING).
+  # prefixo da rota no API Gateway (/management/..., /os/..., /billing/..., /execution/...) e o
+  # sufixo do target group. Precisa ser igual ao nodePort do service.yml da API:
+  # kubernetes/k8s/features/management-api/ (este repo), kubernetes/k8s/features/os-service-api/
+  # (repo OS-SERVICE), kubernetes/k8s/features/billing-api/ (repo BILLING) e
+  # kubernetes/k8s/features/execution-api/ (repo EXECUTION).
   api_node_ports = {
     management = 30080
     os         = 30081
     billing    = 30082
+    execution  = 30083
   }
 
   # Lambdas do repo LAMBDA (AWS SAM), referenciadas pelo nome fixo: o apply nao depende delas

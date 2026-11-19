@@ -1,8 +1,9 @@
 name: Destroy
 # Destrutivo: exige confirmação por input e aprovação no Environment "destroy". Os dados do RDS são perdidos.
 # Antes, rode o Destroy do repo LAMBDA (a Lambda buscar-cliente fica nas subnets privadas e tem uma regra no SG do RDS)
-# e os dos repos OS-SERVICE e BILLING (o RDS de cada um fica nas subnets privadas e o SG dele referencia o SG dos nodes).
-# Ordem entre os repos: LAMBDA, OS-SERVICE e BILLING (em qualquer ordem) → este.
+# e os dos repos OS-SERVICE, BILLING e EXECUTION (o RDS de cada um fica nas subnets privadas e o SG dele referencia o SG
+# dos nodes). Os jobs *-check abaixo barram o Destroy enquanto algum deles estiver de pé.
+# Ordem entre os repos: LAMBDA, OS-SERVICE, BILLING e EXECUTION (em qualquer ordem) → este.
 # Ordem: RDS (DB/infra) → addons → foundation (EKS, API Gateway, NLB e VPC). O SQS (SQS/infra) sai em paralelo.
 
 on:
@@ -87,8 +88,28 @@ jobs:
             exit 1
           fi
 
+  # RDS e SG do repo EXECUTION: mesmo motivo do os-service-check (subnets privadas e SG que referencia o SG dos nodes)
+  execution-check:
+    if: inputs.confirm == 'destroy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verificar se o RDS do repo EXECUTION já foi destruído
+        run: |
+          rds=$(aws rds describe-db-instances --query "length(DBInstances[?DBInstanceIdentifier=='techchallenge-oficina-execution-postgres'])" --output text)
+          sg=$(aws ec2 describe-security-groups --filters Name=group-name,Values=techchallenge-oficina-execution-rds-sg --query 'length(SecurityGroups)' --output text)
+          if [ "$rds" != "0" ] || [ "$sg" != "0" ]; then
+            echo "::error::O RDS techchallenge-oficina-execution-postgres ou o SG techchallenge-oficina-execution-rds-sg (repo EXECUTION) ainda existe. Rode o Destroy do repo EXECUTION antes."
+            exit 1
+          fi
+
   gate:
-    needs: [lambda-check, os-service-check, billing-check]
+    needs: [lambda-check, os-service-check, billing-check, execution-check]
     runs-on: ubuntu-latest
     environment: destroy
     steps:
