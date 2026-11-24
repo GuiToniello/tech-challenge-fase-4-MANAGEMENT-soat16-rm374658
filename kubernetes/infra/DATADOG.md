@@ -9,7 +9,7 @@ A parte da aplicação (logs JSON, eventos de negócio e `/health/ready`) fica n
 | R1 | Latência das APIs | APM: tracer .NET injetado no cluster → p95 de `trace.aspnet_core.request` por serviço (`management-api`, `os-service-api`, `billing-api` e `execution-api`), no monitor e no dashboard; por rota, na página do serviço no APM |
 | R2 | Recursos do Kubernetes | Agent (DaemonSet + Cluster Agent) → métricas `kubernetes.*` e `kubernetes_state.*`; monitores de CPU e memória contra o limit, restarts, CrashLoopBackOff e nodes; widgets. Os monitores e widgets por deployment filtram o namespace `oficina` |
 | R3 | Healthchecks e uptime | `http_check` do Agent no `/health/ready` de cada API, que checa o banco; Synthetics em `GET /management/health`, `GET /os/health`, `GET /billing/health` e `GET /execution/health` pelo API Gateway, com SLO |
-| R4 | Falhas no processamento de OS | `os.falha` por etapa, 5xx por rota (APM), `integracao.falha` (Resend, Mercado Pago e SQS) e banco indisponível; métricas e monitores |
+| R4 | Falhas no processamento de OS | `os.falha` por etapa, 5xx por rota (APM), `integracao.falha` (Resend, Mercado Pago, SQS e DynamoDB) e banco indisponível; métricas e monitores |
 | R5 | Logs estruturados | Um JSON por linha no stdout, coletado pelo Agent |
 | R6 | Correlação | `dd.trace_id` e `dd.span_id` nos logs ligam cada log ao trace do request, dentro da API. API Gateway e Lambdas não são rastreados |
 | R7 | Dashboard | Um dashboard com OS, APIs, Kubernetes, disponibilidade e logs de erro |
@@ -57,7 +57,7 @@ O [datadog.tf](addons/datadog.tf) chama o módulo local [addons/modules/datadog/
 | R4 | Erros de integração | `oficina.integracao.erros` > 0 em 15 min |
 
 - As falhas de regra de negócio (`os.falha`) ficam só no dashboard, sem monitor: o e2e (`e2e/` e a collection do repo OS-SERVICE) gera erros 400 de propósito.
-- Os monitores de APM (latência e 5xx), o de `http.can_connect` e o de erros de integração cobrem as quatro APIs. O de erros de integração também dispara com `integracao:sqs` e `integracao:mercadopago`.
+- Os monitores de APM (latência e 5xx), o de `http.can_connect` e o de erros de integração cobrem as quatro APIs. O de erros de integração também dispara com `integracao:sqs`, `integracao:mercadopago` e `integracao:dynamodb` (inclusive com o `Warning` da gravação no DynamoDB).
 - **Limitação:** os monitores e os widgets de Kubernetes por deployment (CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis) filtram `kube_namespace:oficina` (`namespace_scope`, no `locals.tf` do módulo), o namespace só da Management. Os pods do OS Service (namespace `os-service`), do Billing (namespace `billing`) e do Execução e Produção (namespace `execution`) ficam de fora deles; os três aparecem no APM, nos logs, no `http.can_connect` e no synthetic.
 - Os monitores têm o prefixo `[oficina]` no nome e a tag `env:study`, e notificam `DD_ALERT_RECIPIENTS`. Sem esse secret, os alertas aparecem só no Datadog.
 - O output `datadog_dashboard_url` do addons traz a URL do dashboard e aparece no fim do apply (Bootstrap ou Deploy).
@@ -154,7 +154,7 @@ O `evento` também traz nomes de eventos do framework; por isso as métricas fil
 | 1002 | `os.status_alterado` | Information | `os-service-api` | `OrdemServicoId`, `StatusAnterior`, `StatusNovo`, `Etapa`, `TempoNoStatusAnteriorSegundos` (número) |
 | 1003 | `os.encerrada` | Information | `os-service-api` | `OrdemServicoId`, `TempoTotalSegundos` (número). A OS é encerrada na entrega (status Entregue) |
 | 2001 | `os.falha` | Warning | Os quatro | `Etapa`, `OrdemServicoId`, `TipoFalha`, `Motivo` |
-| 3001 | `integracao.falha` | Error (SQS, envio do orçamento e Mercado Pago) / Warning (notificação de status) | Os quatro (Resend na Management e no Billing; Mercado Pago só no Billing) | `Integracao`, `Operacao`, `OrdemServicoId`; na notificação, também `StatusNovo`; no SQS, também `Tipo` e `Fila` (na publicação, a fila que falhou) e, no consumo, `EventoId` e `MessageId` (`MensagemId` no OS Service, no Billing e no Execução e Produção) |
+| 3001 | `integracao.falha` | Error (SQS, envio do orçamento, Mercado Pago e consulta no DynamoDB) / Warning (notificação de status e gravação no DynamoDB) | Os quatro (Resend na Management e no Billing; Mercado Pago só no Billing; DynamoDB no Billing e no Execução e Produção) | `Integracao`, `Operacao`, `OrdemServicoId`; na notificação, também `StatusNovo`; no SQS, também `Tipo` e `Fila` (na publicação, a fila que falhou) e, no consumo, `EventoId` e `MessageId` (`MensagemId` no OS Service, no Billing e no Execução e Produção) |
 | 4001 | `evento.publicado` | Information | Os quatro (um log por fila de destino) | `Tipo`, `EventoId`, `OrdemServicoId`, `Fila` |
 | 4002 | `evento.consumido` | Information | Os quatro | `Tipo`, `EventoId`, `Fila` |
 | 4003 | `evento.ignorado` | Information (Management) / Warning (os outros três) | Os quatro | `Tipo`, `EventoId`, `Fila` |
@@ -170,8 +170,8 @@ Os eventos do orçamento e do pagamento (`os.orcamento_*`, que saíram da Manage
 | `Etapa` | `abertura`, `atualizacao`, `exclusao`, `diagnostico`, `orcamento_geracao`, `orcamento_envio`, `orcamento_aprovacao`, `orcamento_recusa`, `execucao` (só no Execução e Produção), `finalizacao`, `entrega`, `cancelamento`, `estoque_debito` (Management) e, no Billing, `pagamento_verificacao` e `pagamento_notificacao` |
 | `TipoFalha` | `regra_negocio` (DomainException), `nao_encontrado` (KeyNotFoundException) |
 | `StatusAnterior` / `StatusNovo` | `recebida`, `em_diagnostico`, `aguardando_aprovacao`, `em_execucao`, `finalizada`, `entregue`, `encerrada`, `cancelada` |
-| `Integracao` | `resend`, `mercadopago`, `postgres`, `sqs` |
-| `Operacao` | `envio_orcamento`, `notificacao_status`, `criacao_cobranca`, `consulta_pagamento`, `publicacao`, `consumo` |
+| `Integracao` | `resend`, `mercadopago`, `postgres`, `sqs`, `dynamodb` (Billing e Execução e Produção) |
+| `Operacao` | `envio_orcamento`, `notificacao_status`, `criacao_cobranca`, `consulta_pagamento`, `publicacao`, `consumo`, `registro_historico` e `consulta_historico` (DynamoDB) |
 
 ### 5.4 Métricas de log
 
