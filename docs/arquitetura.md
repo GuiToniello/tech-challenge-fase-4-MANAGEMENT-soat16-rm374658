@@ -42,6 +42,7 @@ Os diagramas usam [Mermaid](https://mermaid.js.org/), que o GitHub desenha sozin
 | Pod | Uma cópia de uma API rodando no Kubernetes |
 | HPA | Regra do Kubernetes que cria ou remove pods de uma API conforme o uso de CPU e memória |
 | RDS (PostgreSQL) | Banco de dados relacional (organizado em tabelas), gerenciado pela AWS. Cada API tem o seu |
+| DynamoDB | Banco NoSQL (chave-valor) da AWS, sem servidor e cobrado por uso. Só o Billing o usa, para o histórico de pagamentos |
 | Auth0 | Serviço externo que guarda os usuários (e-mail e senha) e emite os JWTs |
 | Datadog | Serviço externo de monitoramento: recebe logs, métricas e traces, mostra painéis e envia alertas |
 | Resend | Serviço externo de envio de e-mail |
@@ -65,6 +66,8 @@ flowchart LR
       FilaB[[Fila do Billing]]
       FilaE[[Fila do Execucao e Producao]]
     end
+
+    DDBB[(Amazon DynamoDB<br/>historico de pagamentos<br/>do Billing)]
 
     subgraph VPC[VPC - rede do projeto]
       subgraph EKS[Kubernetes - Amazon EKS]
@@ -98,6 +101,7 @@ flowchart LR
   API -->|le e grava| DB
   OS -->|le e grava| DBOS
   BIL -->|le e grava| DBB
+  BIL -->|historico de pagamentos| DDBB
   EXE -->|le e grava| DBE
   OS -->|publica eventos| FilaM
   OS -->|publica eventos| FilaB
@@ -138,6 +142,7 @@ Como ler: a seta cheia é uma chamada ou uma mensagem; a tracejada é o envio do
 | PostgreSQL da Management (Amazon RDS) | Banco da Management API, também lido pela Lambda `buscar-cliente` (repo LAMBDA). Sem acesso pela internet | `DB/` |
 | PostgreSQL do OS Service (Amazon RDS) | Banco do OS Service (`oficina_os`), na mesma rede. Só o OS Service o acessa | Repo OS-SERVICE |
 | PostgreSQL do Billing (Amazon RDS) | Banco do Billing (`oficina_billing`), na mesma rede. Só o Billing o acessa | Repo BILLING |
+| DynamoDB do Billing | Tabela `techchallenge-oficina-billing-pagamentos-historico`: histórico complementar dos eventos de pagamento de cada OS, que expira em 180 dias. O PostgreSQL do Billing continua sendo a fonte da verdade. Só o Billing a acessa ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) | Repo BILLING |
 | PostgreSQL do Execução e Produção (Amazon RDS) | Banco do Execução e Produção (`oficina_execution`), na mesma rede. Só o Execução e Produção o acessa | Repo EXECUTION |
 | Auth0 | Guarda os usuários e emite e assina os JWTs | Externo (configurado no repo LAMBDA) |
 | Resend | Envia o orçamento (Billing) e, se ligado, o e-mail de mudança de status (Management) | Externo |
@@ -145,9 +150,9 @@ Como ler: a seta cheia é uma chamada ou uma mensagem; a tracejada é o envio do
 | Datadog | Monitoramento das quatro APIs: logs, métricas, traces, alertas e dashboard | Externo (configurado em `kubernetes/`) |
 
 Detalhes que o diagrama esconde:
-- **Rede:** entre o API Gateway e as APIs há um VPC Link e um balanceador interno (NLB), e os bancos ficam numa sub-rede sem internet. Os pods chegam ao SQS pela saída das sub-redes públicas, como chegam ao ECR. Veja o [kubernetes/infra/ESTRUTURA.md](../kubernetes/infra/ESTRUTURA.md).
+- **Rede:** entre o API Gateway e as APIs há um VPC Link e um balanceador interno (NLB), e os bancos ficam numa sub-rede sem internet. Os pods chegam ao SQS (e o Billing, ao DynamoDB) pela saída das sub-redes públicas, como chegam ao ECR. Veja o [kubernetes/infra/ESTRUTURA.md](../kubernetes/infra/ESTRUTURA.md).
 - **Kubernetes:** Deployment, Service, ConfigMap, Secret e HPA da Management API estão no [kubernetes/k8s/README.md](../kubernetes/k8s/README.md); os do OS Service, no repo OS-SERVICE (namespace `os-service`), os do Billing, no repo BILLING (namespace `billing`), e os do Execução e Produção, no repo EXECUTION (namespace `execution`).
-- **Filas e credenciais:** cada serviço acessa o SQS com um usuário IAM próprio, cuja chave fica no SSM Parameter Store e vai para o Secret dos pods. Veja o [SQS/README.md](../SQS/README.md).
+- **Filas e credenciais:** cada serviço acessa o SQS com um usuário IAM próprio, cuja chave fica no SSM Parameter Store e vai para o Secret dos pods. O usuário do Billing também recebe, do repo BILLING, a permissão na tabela DynamoDB do histórico. Veja o [SQS/README.md](../SQS/README.md).
 - **Monitoramento:** o Datadog Agent roda dentro do cluster e envia os dados ao Datadog. Veja [observabilidade.md](./observabilidade.md) e o [kubernetes/infra/DATADOG.md](../kubernetes/infra/DATADOG.md).
 - **Entrega de versões (CI/CD):** cada repositório tem as próprias pipelines. Para subir: Bootstrap deste monorepo → Bootstrap do OS-SERVICE → Bootstrap do EXECUTION (o OS Service precisa consumir os eventos novos antes de o Execução e Produção publicá-los), com o do BILLING a qualquer momento depois deste monorepo → Deploy do LAMBDA. Para derrubar: Destroy do LAMBDA, do OS-SERVICE, do BILLING e do EXECUTION → Destroy deste monorepo. Veja as pipelines [deste monorepo](../.github/workflows/README.md), do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/.github/workflows/README.md), do [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/.github/workflows/README.md), do [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/.github/workflows/README.md) e do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658#9-pipelines-github-actions).
 
@@ -345,7 +350,7 @@ As decisões ficam registradas em dois tipos de documento:
 - **RFC (Request for Comments):** proposta escrita que apresenta um problema, compara as opções e recomenda uma. Serve para discutir antes de decidir.
 - **ADR (Architecture Decision Record):** registro de uma decisão tomada, com o contexto, as consequências e as alternativas rejeitadas. Explica "por que é assim".
 
-As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019, do OS Service, fica no repo OS-SERVICE, a ADR-021 e a ADR-022, do Billing, no repo BILLING, a ADR-023, do Execução e Produção, no repo EXECUTION, e a RFC-003, de autenticação, no repo LAMBDA. A numeração é compartilhada entre os cinco repositórios.
+As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019, do OS Service, fica no repo OS-SERVICE, a ADR-021, a ADR-022 e a ADR-024, do Billing, no repo BILLING, a ADR-023, do Execução e Produção, no repo EXECUTION, e a RFC-003, de autenticação, no repo LAMBDA. A numeração é compartilhada entre os cinco repositórios.
 
 ### 5.1. RFCs
 
@@ -370,3 +375,4 @@ As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019, do 
 | [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) | Billing: o orçamento e o pagamento num microsserviço com banco, namespace e pipelines próprios | BILLING |
 | [ADR-022](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md) | Pagamento do orçamento pelo Checkout Pro do Mercado Pago, com verificação por consulta e webhook | BILLING |
 | [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) | Execução e Produção: a fila de produção, o diagnóstico e a execução num microsserviço com banco, namespace e pipelines próprios, que muda o status da OS só por eventos ao OS Service | EXECUTION |
+| [ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) | Histórico dos eventos de pagamento do Billing no Amazon DynamoDB (NoSQL), complementar e descartável; o PostgreSQL continua sendo a fonte da verdade | BILLING |

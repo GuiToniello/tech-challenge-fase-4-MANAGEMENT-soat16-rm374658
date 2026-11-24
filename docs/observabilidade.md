@@ -134,7 +134,7 @@ Os quatro serviços usam os mesmos nomes de evento, `EventId`, propriedades e va
 | `app.migracao_falhou` (9002) | Critical (`Fatal` no JSON) | `Program.cs` de cada API ([o da Management](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Program.cs)), em volta de `ApplyMigrations()`. A API encerra com código 1 e o pod entra em CrashLoopBackOff | `error.*` |
 
 Observações:
-- **Orçamento e pagamento, no Billing**: `os.orcamento_gerado` (1004) e `os.orcamento_enviado` (1005) saíram da Management junto com o orçamento e saem do `billing-api`, com os mesmos nomes. O Billing também emite os eventos `pagamento.*` e o `integracao.falha` do envio do orçamento (`resend`, `envio_orcamento`) e do Mercado Pago (`mercadopago`). Tudo isso está na [observabilidade do Billing](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/observabilidade.md).
+- **Orçamento e pagamento, no Billing**: `os.orcamento_gerado` (1004) e `os.orcamento_enviado` (1005) saíram da Management junto com o orçamento e saem do `billing-api`, com os mesmos nomes. O Billing também emite os eventos `pagamento.*` e o `integracao.falha` do envio do orçamento (`resend`, `envio_orcamento`), do Mercado Pago (`mercadopago`) e do histórico de pagamentos no DynamoDB (`dynamodb`: `registro_historico` como `Warning`, sem interromper o pagamento, e `consulta_historico` como `Error`). Tudo isso está na [observabilidade do Billing](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/observabilidade.md).
 - **Fila de produção, no Execução e Produção**: além dos eventos da tabela, o `execution-api` emite `execucao.diagnostico_iniciado` (6001), `execucao.iniciada` (6002) e `execucao.finalizada` (6003), que não alimentam métricas, monitores nem o dashboard. Ele não emite `os.status_alterado`: a mudança de status continua saindo do OS Service, quando ele consome `DiagnosticoIniciado` e `ExecucaoFinalizada`. Os detalhes estão na [observabilidade do Execução e Produção](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/observabilidade.md).
 - **Falha ao buscar o cliente para a notificação de status** (Management): sai um `Warning` sem `EventId` e sem `Integracao`, porque não é falha do Resend. Não conta em `oficina.integracao.erros`.
 - **Resend sem configuração** (Management): sem `ApiKey` ou `FromEmail`, o e-mail de status não sai, e nada é registrado. Chave inválida ou Resend fora do ar geram o `integracao.falha` (`notificacao_status`).
@@ -180,11 +180,13 @@ As etapas do pagamento (`pagamento_verificacao` e `pagamento_notificacao`) apare
 | `Integracao` | `mercadopago` | Falha na chamada ao Mercado Pago (`integracao.falha`, só no Billing) |
 | `Integracao` | `postgres` | Banco indisponível (`http.erro_nao_tratado`) |
 | `Integracao` | `sqs` | Falha ao publicar ou consumir um evento (`integracao.falha`, nos quatro serviços) |
+| `Integracao` | `dynamodb` | Falha ao gravar ou consultar o histórico de pagamentos (`integracao.falha`, só no Billing) |
 | `Operacao` | `envio_orcamento` | Envio do orçamento por e-mail, no Billing (`Integracao` = `resend`) |
 | `Operacao` | `notificacao_status` | E-mail de mudança de status, na Management (`Integracao` = `resend`) |
 | `Operacao` | `criacao_cobranca` e `consulta_pagamento` | Cobrança e consulta do pagamento, no Billing (`Integracao` = `mercadopago`) |
 | `Operacao` | `publicacao` | Envio de um evento a uma das filas de destino (`Integracao` = `sqs`) |
 | `Operacao` | `consumo` | Leitura da própria fila e processamento da mensagem (`Integracao` = `sqs`) |
+| `Operacao` | `registro_historico` e `consulta_historico` | Gravação (`Warning`, *best-effort*) e consulta (`Error`) do histórico de pagamentos, no Billing (`Integracao` = `dynamodb`) |
 
 ### 4.3 Status (`StatusAnterior` e `StatusNovo`)
 
@@ -211,12 +213,12 @@ As métricas de log são criadas por Terraform em [kubernetes/infra/addons/modul
 | `os.encerrada` | `oficina.os.encerradas` | count, `@evento:os.encerrada` | `env` | OS encerradas por dia (barras) | — |
 | `os.status_alterado` | `oficina.os.tempo_no_status` | distribution de `@TempoNoStatusAnteriorSegundos`, `@evento:os.status_alterado` | `status_anterior` (de `@StatusAnterior`), `env` | Tempo médio por status, em minutos | — |
 | `os.falha` | `oficina.os.falhas` | count, `@evento:os.falha` | `etapa` (de `@Etapa`), `tipo_falha` (de `@TipoFalha`), `env` | Falhas de negócio por etapa | — (o e2e gera 400 de propósito) |
-| `integracao.falha` e `http.erro_nao_tratado` com `Integracao` | `oficina.integracao.erros` | count, `@Integracao:*` (conta os níveis `Error` e `Warning`) | `integracao` (de `@Integracao`: `resend`, `mercadopago`, `postgres` ou `sqs`), `env` | Erros de integração | `oficina.integracao.erros` > 0 em 15 min |
+| `integracao.falha` e `http.erro_nao_tratado` com `Integracao` | `oficina.integracao.erros` | count, `@Integracao:*` (conta os níveis `Error` e `Warning`) | `integracao` (de `@Integracao`: `resend`, `mercadopago`, `postgres`, `sqs` ou `dynamodb`), `env` | Erros de integração | `oficina.integracao.erros` > 0 em 15 min |
 | `http.erro_nao_tratado` | — (o 5xx vem do APM: `trace.aspnet_core.request.errors`) | — | `service`, `resource_name` | 5xx por rota | 5xx por rota > 0 |
 | `evento.publicado`, `evento.consumido`, `evento.ignorado`, no Billing, os eventos do orçamento e do pagamento e, no Execução e Produção, os `execucao.*` | — | — | — | — (consulta no Log Explorer) | — |
 | `app.migracao_falhou` | — | — | — | Logs de erro recentes (sai como `Fatal`, que o Datadog mostra com status `emergency`) | — (a falha de migração aparece nos monitores de CrashLoopBackOff e restarts, só para a Management; ver abaixo) |
 
-- O widget **Logs de erro recentes** lista os logs das quatro APIs com `status:(error OR emergency)`: todo log `Error` (como `http.erro_nao_tratado` e os `integracao.falha` do SQS e, no Billing, do envio do orçamento e do Mercado Pago) e o `app.migracao_falhou`, que é `Fatal`. Uma consulta só com `status:error` deixa a falha de migração de fora.
+- O widget **Logs de erro recentes** lista os logs das quatro APIs com `status:(error OR emergency)`: todo log `Error` (como `http.erro_nao_tratado` e os `integracao.falha` do SQS e, no Billing, do envio do orçamento, do Mercado Pago e da consulta do histórico no DynamoDB) e o `app.migracao_falhou`, que é `Fatal`. Uma consulta só com `status:error` deixa a falha de migração de fora.
 - Os ids (`OrdemServicoId`, `ClienteId`, `VeiculoId`, `EventoId`) são atributos de log e **nunca** viram tags de métrica (cardinalidade).
 - As métricas de log não têm backfill: só contam os eventos ingeridos depois que a métrica existe. Para popular o dashboard, rode o fluxo de OS (collection do Postman do repo OS-SERVICE) depois do deploy do Datadog.
 - Os demais widgets e monitores (latência p95, CPU e memória, restarts, nós, réplicas, `http.can_connect`, synthetics e SLO) usam métricas do APM e do Agent, sem depender dos logs. Estão no [kubernetes/infra/DATADOG.md](../kubernetes/infra/DATADOG.md). Os de APM, `http.can_connect` e synthetics cobrem as quatro APIs; os de Kubernetes (CPU, memória, CrashLoopBackOff, restarts e réplicas) filtram só o namespace `oficina` (limitação registrada na ADR-014).
@@ -241,8 +243,8 @@ No Log Explorer do Datadog:
 | Falhas de negócio | `@evento:os.falha` |
 | Falhas de uma etapa | `@evento:os.falha @Etapa:estoque_debito` |
 | Recursos inexistentes | `@evento:os.falha @TipoFalha:nao_encontrado` |
-| Erros de integração (Resend, Mercado Pago, banco e SQS) | `@Integracao:*` |
-| Só e-mail, só pagamento, só banco ou só fila | `@Integracao:resend`, `@Integracao:mercadopago`, `@Integracao:postgres` ou `@Integracao:sqs` |
+| Erros de integração (Resend, Mercado Pago, banco, SQS e DynamoDB) | `@Integracao:*` |
+| Só e-mail, só pagamento, só banco, só fila ou só o histórico de pagamentos | `@Integracao:resend`, `@Integracao:mercadopago`, `@Integracao:postgres`, `@Integracao:sqs` ou `@Integracao:dynamodb` |
 | Erros 500 | `@evento:http.erro_nao_tratado` |
 | Histórico de uma OS nos quatro serviços | `@OrdemServicoId:<guid>` |
 | Transições para um status | `@evento:os.status_alterado @StatusNovo:em_execucao` |

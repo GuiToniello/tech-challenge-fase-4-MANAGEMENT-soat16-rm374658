@@ -53,6 +53,8 @@ Cada usuário tem uma policy inline chamada `sqs`, de menor privilégio ([iam.tf
 
 Nenhum dos usuários acessa as DLQs: analisar e reprocessar uma mensagem da DLQ é feito com um usuário administrativo (seção 7).
 
+O usuário do Billing (`techchallenge-oficina-billing-sqs`) também recebe uma segunda policy inline, `dynamodb-historico-pagamentos` (só `dynamodb:PutItem` e `dynamodb:Query` na tabela `techchallenge-oficina-billing-pagamentos-historico`), criada pelo `DB/infra` do repo BILLING ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)): a mesma chave serve às filas e ao histórico de pagamentos. Essa policy não é gerenciada aqui. Se este Terraform recriar o usuário, ela some junto, e é preciso rodar o Bootstrap do BILLING de novo.
+
 ### 1.2 Chaves no SSM e no Secret dos pods
 
 - O Terraform cria uma access key para cada usuário e guarda o ID e o segredo no SSM Parameter Store, como SecureString no tier Standard ([ssm.tf](infra/ssm.tf)).
@@ -132,7 +134,8 @@ O `.terraform.lock.hcl` **é** versionado e fixa o provider AWS (6.66.0).
 
 ## 7. Troubleshooting
 
-- **Apply dos manifests falha em "Adicionar a chave do SQS"** (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
+- **Apply dos manifests falha em "Adicionar a chave do SQS"** (no BILLING, o passo se chama "Adicionar a chave do usuário IAM do Billing (SQS e DynamoDB)") (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
 - **Pods com `integracao.falha` (`sqs`) e erro de credencial no `error.*`**: o Secret tem uma chave que não existe mais, porque o SQS foi recriado depois do último apply dos manifests. O Deploy e o Bootstrap deste monorepo já atualizam o Secret da Management; os do OS Service, do Billing e do Execução e Produção, não. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION (ou o do repositório afetado) com `restart-pods = true`.
+- **Billing com `integracao.falha` (`dynamodb`) e acesso negado no `error.*`**: o usuário IAM do Billing foi recriado aqui e perdeu a policy do DynamoDB, que vem do repo BILLING. Rode o Bootstrap do BILLING (ele reaplica a policy e os manifests com a chave nova).
 - **Mensagens paradas na DLQ**: veja o motivo nos logs `integracao.falha` com `Operacao` = `consumo` ([docs/observabilidade.md](../docs/observabilidade.md)). Depois de corrigir a causa, reenvie as mensagens para a fila de origem pelo console do SQS (redrive da DLQ), com um usuário administrativo. Não há reprocessamento automático.
 - **`Error acquiring the state lock`**: outro apply ou destroy está rodando. Se o lock ficou preso depois de um run cancelado, rode `terraform force-unlock <LOCK_ID>` em `SQS/infra/` ou apague o objeto `techchallenge-oficina/fase-4/sqs.tfstate.tflock` do bucket.

@@ -64,3 +64,5 @@ Usar o **PostgreSQL no Amazon RDS**, com a configuração mais simples que atend
 ## 7. Resultado
 
 Aceita e implementada na pasta [DB/](../../DB/README.md) deste monorepo. A justificativa formal, o diagrama ER e a explicação dos relacionamentos estão na [ADR-017](../adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md).
+
+**Atualização (fase 4):** o Amazon DynamoDB, rejeitado aqui como banco principal, passou a ser usado só no Billing, para o histórico dos eventos de pagamento: dados que só recebem gravações novas, lidos pela OS, sem relacionamentos e que podem expirar. O PostgreSQL continua sendo o banco de cada serviço e a fonte da verdade ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md), repo BILLING).
