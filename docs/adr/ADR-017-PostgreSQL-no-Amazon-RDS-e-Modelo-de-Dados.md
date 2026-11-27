@@ -50,7 +50,7 @@ Usar um banco relacional **PostgreSQL no Amazon RDS**, com a configuração da [
   - rejeitadas por exigirem refazer as migrations e o ambiente local; o SQL Server também tem licença paga.
 - DynamoDB ou MongoDB:
   - rejeitadas porque não garantem relacionamentos no banco, e o modelo da oficina é cheio deles.
-  - Na fase 4, o DynamoDB passou a ser usado no Billing e no Execução e Produção, cada um com a própria tabela, para registros complementares e descartáveis, sem relacionamentos: o histórico dos eventos de pagamento e a linha do tempo da produção. O banco de cada serviço continua sendo o PostgreSQL ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md), repo BILLING, e [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md), repo EXECUTION).
+  - Na fase 4, o DynamoDB passou a ser usado no Billing, no OS Service e no Execução e Produção, cada um com a própria tabela, para registros complementares e descartáveis, sem relacionamentos: o histórico dos eventos de pagamento, o histórico da saga e a linha do tempo da produção. O banco de cada serviço continua sendo o PostgreSQL ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md), repo BILLING, [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md), repo EXECUTION, e [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md), repo OS-SERVICE).
 - PostgreSQL num pod do EKS:
   - rejeitada porque backup, atualização e disco ficariam por conta do time, ocupando um cluster pequeno (2 nós `t3.small`).
 - Um banco compartilhado entre a Management e os outros serviços (fase 4):
@@ -67,6 +67,7 @@ Usar um banco relacional **PostgreSQL no Amazon RDS**, com a configuração da [
 - **ADR-023**: o Execução e Produção e o banco dele (`oficina_execution`), com a fila de produção, no repo EXECUTION: [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md).
 - **ADR-024**: o histórico de pagamentos do Billing no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo BILLING: [ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md).
 - **ADR-025**: a linha do tempo da produção do Execução e Produção no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo EXECUTION: [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md).
+- **ADR-026**: o histórico da saga do OS Service no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo OS-SERVICE: [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md).
 
 ## Modelo de dados
 

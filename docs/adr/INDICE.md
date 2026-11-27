@@ -28,6 +28,7 @@ A visão geral da arquitetura (diagramas de componentes e de sequência) e o ín
 22. [ADR-023: Execução e Produção, Fila de Execução e Status por Eventos](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) (repo EXECUTION)
 23. [ADR-024: Histórico de Pagamentos no Amazon DynamoDB](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) (repo BILLING)
 24. [ADR-025: Linha do Tempo da Produção no Amazon DynamoDB](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md) (repo EXECUTION)
+25. [ADR-026: Histórico da Saga no Amazon DynamoDB](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md) (repo OS-SERVICE)
 
 Com a entrada do Billing (fase 4), foram atualizadas a ADR-004, a ADR-011, a ADR-012, a ADR-014, a ADR-015, a ADR-016, a ADR-017, a ADR-018 e a ADR-020, além da RFC-004: o orçamento saiu da Management, o débito de estoque passou para o pagamento aprovado, as filas passaram a ser três, com *fan-out* no publicador, e o HPA de cada API ficou de 1 a 3 pods.
 
@@ -35,7 +36,7 @@ Com a entrada do Execução e Produção (fase 4), foram atualizadas a ADR-004, 
 
 ### RFCs
 
-A numeração das ADRs e RFCs é compartilhada entre este monorepo e os repositórios OS-SERVICE, BILLING, EXECUTION e LAMBDA. As RFCs deste monorepo ficam em `docs/rfc/`; a ADR-019 fica no repo OS-SERVICE, a ADR-021, a ADR-022 e a ADR-024, no repo BILLING, a ADR-023 e a ADR-025, no repo EXECUTION, e a RFC-003, no repo LAMBDA:
+A numeração das ADRs e RFCs é compartilhada entre este monorepo e os repositórios OS-SERVICE, BILLING, EXECUTION e LAMBDA. As RFCs deste monorepo ficam em `docs/rfc/`; a ADR-019 e a ADR-026 ficam no repo OS-SERVICE, a ADR-021, a ADR-022 e a ADR-024, no repo BILLING, a ADR-023 e a ADR-025, no repo EXECUTION, e a RFC-003, no repo LAMBDA:
 
 - [RFC-001: Escolha da nuvem](../rfc/RFC-001-Escolha-da-Nuvem.md)
 - [RFC-002: Escolha do banco de dados](../rfc/RFC-002-Escolha-do-Banco-de-Dados.md)
@@ -63,6 +64,7 @@ A numeração das ADRs e RFCs é compartilhada entre este monorepo e os reposit�
 - **ADR-019**, **ADR-021** e **ADR-023**: Um banco por serviço: o OS Service, o Billing e o Execução e Produção têm o próprio RDS (repos OS-SERVICE, BILLING e EXECUTION)
 - **ADR-024**: Histórico dos eventos de pagamento do Billing no Amazon DynamoDB (NoSQL), complementar e descartável; o PostgreSQL continua sendo a fonte da verdade (repo BILLING)
 - **ADR-025**: Linha do tempo da produção do Execução e Produção no Amazon DynamoDB (NoSQL), no mesmo padrão da ADR-024, com tabela e permissão próprias; o PostgreSQL continua sendo a fonte da verdade (repo EXECUTION)
+- **ADR-026**: Histórico da saga do OS Service (o resultado de cada evento consumido) no Amazon DynamoDB (NoSQL), no mesmo padrão da ADR-024 e da ADR-025, com tabela e permissão próprias; o PostgreSQL continua sendo a fonte da verdade (repo OS-SERVICE)
 
 ### Contexto de Comunicação entre Componentes
 - **ADR-015**: Comunicação síncrona (HTTP/REST) dos clientes com as APIs, com entrada única pelo API Gateway e sem chamadas HTTP entre as APIs

@@ -53,14 +53,15 @@ Cada usuário tem uma policy inline chamada `sqs`, de menor privilégio ([iam.tf
 
 Nenhum dos usuários acessa as DLQs: analisar e reprocessar uma mensagem da DLQ é feito com um usuário administrativo (seção 7).
 
-Dois usuários também recebem uma segunda policy inline, criada pelo `DB/infra` do repositório do serviço, para a própria tabela DynamoDB (só `dynamodb:PutItem` e `dynamodb:Query`): a mesma chave serve às filas e à tabela.
+Três usuários também recebem uma segunda policy inline, criada pelo `DB/infra` do repositório do serviço, para a própria tabela DynamoDB (só `dynamodb:PutItem` e `dynamodb:Query`): a mesma chave serve às filas e à tabela.
 
 | Usuário | Policy | Tabela | Criada por |
 |---|---|---|---|
+| `techchallenge-oficina-os-service-sqs` | `dynamodb-historico-saga` | `techchallenge-oficina-os-saga-historico` (histórico da saga) | Repo OS-SERVICE ([ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md)) |
 | `techchallenge-oficina-billing-sqs` | `dynamodb-historico-pagamentos` | `techchallenge-oficina-billing-pagamentos-historico` (histórico de pagamentos) | Repo BILLING ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) |
 | `techchallenge-oficina-execution-sqs` | `dynamodb-historico-producao` | `techchallenge-oficina-execution-producao-historico` (linha do tempo da produção) | Repo EXECUTION ([ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md)) |
 
-Essas policies não são gerenciadas aqui. Se este Terraform recriar um desses usuários, a policy dele some junto, e é preciso rodar de novo o Bootstrap do BILLING ou do EXECUTION (o Deploy deles só reaplica o `DB/infra` quando os arquivos mudam).
+Essas policies não são gerenciadas aqui. Se este Terraform recriar um desses usuários, a policy dele some junto, e é preciso rodar de novo o Bootstrap do OS-SERVICE, do BILLING ou do EXECUTION (o Deploy deles só reaplica o `DB/infra` quando os arquivos mudam).
 
 ### 1.2 Chaves no SSM e no Secret dos pods
 
@@ -141,8 +142,8 @@ O `.terraform.lock.hcl` **é** versionado e fixa o provider AWS (6.66.0).
 
 ## 7. Troubleshooting
 
-- **Apply dos manifests falha em "Adicionar a chave do SQS"** (no BILLING e no EXECUTION, o passo se chama "Adicionar a chave do usuário IAM do Billing (SQS e DynamoDB)" e "Adicionar a chave do usuário IAM do Execução e Produção (SQS e DynamoDB)") (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
+- **Apply dos manifests falha em "Adicionar a chave do SQS"** (no OS-SERVICE, no BILLING e no EXECUTION, o passo se chama "Adicionar a chave do usuário IAM do OS Service (SQS e DynamoDB)", "Adicionar a chave do usuário IAM do Billing (SQS e DynamoDB)" e "Adicionar a chave do usuário IAM do Execução e Produção (SQS e DynamoDB)") (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
 - **Pods com `integracao.falha` (`sqs`) e erro de credencial no `error.*`**: o Secret tem uma chave que não existe mais, porque o SQS foi recriado depois do último apply dos manifests. O Deploy e o Bootstrap deste monorepo já atualizam o Secret da Management; os do OS Service, do Billing e do Execução e Produção, não. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION (ou o do repositório afetado) com `restart-pods = true`.
-- **Billing ou Execução e Produção com `integracao.falha` (`dynamodb`) e acesso negado no `error.*`**: o usuário IAM do serviço foi recriado aqui e perdeu a policy do DynamoDB, que vem do repositório do serviço. Rode o Bootstrap do BILLING ou do EXECUTION (ele reaplica a policy e os manifests com a chave nova).
+- **OS Service, Billing ou Execução e Produção com `integracao.falha` (`dynamodb`) e acesso negado no `error.*`**: o usuário IAM do serviço foi recriado aqui e perdeu a policy do DynamoDB, que vem do repositório do serviço. Rode o Bootstrap do OS-SERVICE, do BILLING ou do EXECUTION (ele reaplica a policy e os manifests com a chave nova).
 - **Mensagens paradas na DLQ**: veja o motivo nos logs `integracao.falha` com `Operacao` = `consumo` ([docs/observabilidade.md](../docs/observabilidade.md)). Depois de corrigir a causa, reenvie as mensagens para a fila de origem pelo console do SQS (redrive da DLQ), com um usuário administrativo. Não há reprocessamento automático.
 - **`Error acquiring the state lock`**: outro apply ou destroy está rodando. Se o lock ficou preso depois de um run cancelado, rode `terraform force-unlock <LOCK_ID>` em `SQS/infra/` ou apague o objeto `techchallenge-oficina/fase-4/sqs.tfstate.tflock` do bucket.

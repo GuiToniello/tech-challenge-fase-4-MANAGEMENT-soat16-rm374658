@@ -42,7 +42,7 @@ Os diagramas usam [Mermaid](https://mermaid.js.org/), que o GitHub desenha sozin
 | Pod | Uma cópia de uma API rodando no Kubernetes |
 | HPA | Regra do Kubernetes que cria ou remove pods de uma API conforme o uso de CPU e memória |
 | RDS (PostgreSQL) | Banco de dados relacional (organizado em tabelas), gerenciado pela AWS. Cada API tem o seu |
-| DynamoDB | Banco NoSQL (chave-valor) da AWS, sem servidor e cobrado por uso. O Billing e o Execução e Produção o usam, cada um com a própria tabela: o histórico de pagamentos e a linha do tempo da produção |
+| DynamoDB | Banco NoSQL (chave-valor) da AWS, sem servidor e cobrado por uso. O Billing, o OS Service e o Execução e Produção o usam, cada um com a própria tabela: o histórico de pagamentos, o histórico da saga e a linha do tempo da produção |
 | Auth0 | Serviço externo que guarda os usuários (e-mail e senha) e emite os JWTs |
 | Datadog | Serviço externo de monitoramento: recebe logs, métricas e traces, mostra painéis e envia alertas |
 | Resend | Serviço externo de envio de e-mail |
@@ -67,6 +67,7 @@ flowchart LR
       FilaE[[Fila do Execucao e Producao]]
     end
 
+    DDBO[(Amazon DynamoDB<br/>historico da saga<br/>do OS Service)]
     DDBB[(Amazon DynamoDB<br/>historico de pagamentos<br/>do Billing)]
     DDBE[(Amazon DynamoDB<br/>linha do tempo da producao<br/>do Execucao e Producao)]
 
@@ -101,6 +102,7 @@ flowchart LR
   Lambdas -->|pede o JWT| Auth0
   API -->|le e grava| DB
   OS -->|le e grava| DBOS
+  OS -->|historico da saga| DDBO
   BIL -->|le e grava| DBB
   BIL -->|historico de pagamentos| DDBB
   EXE -->|le e grava| DBE
@@ -143,6 +145,7 @@ Como ler: a seta cheia é uma chamada ou uma mensagem; a tracejada é o envio do
 | Filas Amazon SQS FIFO | Uma fila de entrada por serviço, cada uma com a sua DLQ. Levam os eventos da saga entre as quatro APIs | `SQS/` |
 | PostgreSQL da Management (Amazon RDS) | Banco da Management API, também lido pela Lambda `buscar-cliente` (repo LAMBDA). Sem acesso pela internet | `DB/` |
 | PostgreSQL do OS Service (Amazon RDS) | Banco do OS Service (`oficina_os`), na mesma rede. Só o OS Service o acessa | Repo OS-SERVICE |
+| DynamoDB do OS Service | Tabela `techchallenge-oficina-os-saga-historico`: histórico complementar da saga de cada OS (o que o OS Service fez com cada evento consumido: processado, com o status antes e depois, ou ignorado, com o motivo), que expira em 180 dias. O PostgreSQL do OS Service continua sendo a fonte da verdade. Só o OS Service a acessa ([ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md)) | Repo OS-SERVICE |
 | PostgreSQL do Billing (Amazon RDS) | Banco do Billing (`oficina_billing`), na mesma rede. Só o Billing o acessa | Repo BILLING |
 | DynamoDB do Billing | Tabela `techchallenge-oficina-billing-pagamentos-historico`: histórico complementar dos eventos de pagamento de cada OS, que expira em 180 dias. O PostgreSQL do Billing continua sendo a fonte da verdade. Só o Billing a acessa ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) | Repo BILLING |
 | PostgreSQL do Execução e Produção (Amazon RDS) | Banco do Execução e Produção (`oficina_execution`), na mesma rede. Só o Execução e Produção o acessa | Repo EXECUTION |
@@ -153,9 +156,9 @@ Como ler: a seta cheia é uma chamada ou uma mensagem; a tracejada é o envio do
 | Datadog | Monitoramento das quatro APIs: logs, métricas, traces, alertas e dashboard | Externo (configurado em `kubernetes/`) |
 
 Detalhes que o diagrama esconde:
-- **Rede:** entre o API Gateway e as APIs há um VPC Link e um balanceador interno (NLB), e os bancos ficam numa sub-rede sem internet. Os pods chegam ao SQS (e os do Billing e do Execução e Produção, ao DynamoDB) pela saída das sub-redes públicas, como chegam ao ECR. Veja o [kubernetes/infra/ESTRUTURA.md](../kubernetes/infra/ESTRUTURA.md).
+- **Rede:** entre o API Gateway e as APIs há um VPC Link e um balanceador interno (NLB), e os bancos ficam numa sub-rede sem internet. Os pods chegam ao SQS (e os do Billing, do OS Service e do Execução e Produção, ao DynamoDB) pela saída das sub-redes públicas, como chegam ao ECR. Veja o [kubernetes/infra/ESTRUTURA.md](../kubernetes/infra/ESTRUTURA.md).
 - **Kubernetes:** Deployment, Service, ConfigMap, Secret e HPA da Management API estão no [kubernetes/k8s/README.md](../kubernetes/k8s/README.md); os do OS Service, no repo OS-SERVICE (namespace `os-service`), os do Billing, no repo BILLING (namespace `billing`), e os do Execução e Produção, no repo EXECUTION (namespace `execution`).
-- **Filas e credenciais:** cada serviço acessa o SQS com um usuário IAM próprio, cuja chave fica no SSM Parameter Store e vai para o Secret dos pods. Os usuários do Billing e do Execução e Produção também recebem, do repositório de cada um, a permissão só na própria tabela DynamoDB. Veja o [SQS/README.md](../SQS/README.md).
+- **Filas e credenciais:** cada serviço acessa o SQS com um usuário IAM próprio, cuja chave fica no SSM Parameter Store e vai para o Secret dos pods. Os usuários do Billing, do OS Service e do Execução e Produção também recebem, do repositório de cada um, a permissão só na própria tabela DynamoDB. Veja o [SQS/README.md](../SQS/README.md).
 - **Monitoramento:** o Datadog Agent roda dentro do cluster e envia os dados ao Datadog. Veja [observabilidade.md](./observabilidade.md) e o [kubernetes/infra/DATADOG.md](../kubernetes/infra/DATADOG.md).
 - **Entrega de versões (CI/CD):** cada repositório tem as próprias pipelines. Para subir: Bootstrap deste monorepo → Bootstrap do OS-SERVICE → Bootstrap do EXECUTION (o OS Service precisa consumir os eventos novos antes de o Execução e Produção publicá-los), com o do BILLING a qualquer momento depois deste monorepo → Deploy do LAMBDA. Para derrubar: Destroy do LAMBDA, do OS-SERVICE, do BILLING e do EXECUTION → Destroy deste monorepo. Veja as pipelines [deste monorepo](../.github/workflows/README.md), do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/.github/workflows/README.md), do [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/.github/workflows/README.md), do [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/.github/workflows/README.md) e do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658#9-pipelines-github-actions).
 
@@ -353,7 +356,7 @@ As decisões ficam registradas em dois tipos de documento:
 - **RFC (Request for Comments):** proposta escrita que apresenta um problema, compara as opções e recomenda uma. Serve para discutir antes de decidir.
 - **ADR (Architecture Decision Record):** registro de uma decisão tomada, com o contexto, as consequências e as alternativas rejeitadas. Explica "por que é assim".
 
-As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019, do OS Service, fica no repo OS-SERVICE, a ADR-021, a ADR-022 e a ADR-024, do Billing, no repo BILLING, a ADR-023 e a ADR-025, do Execução e Produção, no repo EXECUTION, e a RFC-003, de autenticação, no repo LAMBDA. A numeração é compartilhada entre os cinco repositórios.
+As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019 e a ADR-026, do OS Service, ficam no repo OS-SERVICE, a ADR-021, a ADR-022 e a ADR-024, do Billing, no repo BILLING, a ADR-023 e a ADR-025, do Execução e Produção, no repo EXECUTION, e a RFC-003, de autenticação, no repo LAMBDA. A numeração é compartilhada entre os cinco repositórios.
 
 ### 5.1. RFCs
 
@@ -380,3 +383,4 @@ As RFCs e ADRs deste monorepo ficam em `docs/rfc/` e `docs/adr/`. A ADR-019, do 
 | [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) | Execução e Produção: a fila de produção, o diagnóstico e a execução num microsserviço com banco, namespace e pipelines próprios, que muda o status da OS só por eventos ao OS Service | EXECUTION |
 | [ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) | Histórico dos eventos de pagamento do Billing no Amazon DynamoDB (NoSQL), complementar e descartável; o PostgreSQL continua sendo a fonte da verdade | BILLING |
 | [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md) | Linha do tempo da produção do Execução e Produção no Amazon DynamoDB (NoSQL), complementar e descartável, no mesmo padrão da ADR-024; o PostgreSQL continua sendo a fonte da verdade | EXECUTION |
+| [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md) | Histórico da saga do OS Service no Amazon DynamoDB (NoSQL): o resultado de cada evento consumido, complementar e descartável, no mesmo padrão da ADR-024 e da ADR-025; o PostgreSQL continua sendo a fonte da verdade | OS-SERVICE |
