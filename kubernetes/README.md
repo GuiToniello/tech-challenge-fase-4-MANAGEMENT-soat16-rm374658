@@ -3,8 +3,8 @@
 Infraestrutura de rede e Kubernetes do projeto **Tech Challenge Oficina** (SOAT16, fase 4). O Terraform desta pasta cria na AWS a VPC, o Amazon EKS, o Amazon API Gateway (acesso externo às APIs) e os addons do cluster, e configura a observabilidade no Datadog. Os manifests Kubernetes da Management API também ficam aqui. Tudo é aplicado pelas pipelines da raiz do monorepo ([.github/workflows/README.md](../.github/workflows/README.md)).
 
 A pasta veio do repositório K8S da fase 3 ([ADR-018](../docs/adr/ADR-018-Monorepo-e-API-Unica-Management.md)) e tem os próprios Terraform states. Ela se relaciona com as outras partes do monorepo e com quatro repositórios externos:
-- **[DB/](../DB/README.md)**: cria o Amazon RDS dentro da rede criada aqui.
-- **[SQS/](../SQS/README.md)**: cria as filas entre os serviços e guarda no SSM a chave que o apply dos manifests põe no Secret da API.
+- **[DB/](../DB/README.md)**: cria o Amazon RDS dentro da rede criada aqui e, fora dela, a tabela DynamoDB do histórico de movimentações de estoque.
+- **[SQS/](../SQS/README.md)**: cria as filas entre os serviços e guarda no SSM a chave que o apply dos manifests põe no Secret da API. A mesma chave acessa a tabela DynamoDB da Management, pela política que o `SQS/` anexa ao usuário.
 - **Aplicação** (`server/`, na raiz do monorepo): a imagem da Management API, publicada no Amazon ECR pelas pipelines.
 - **[OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658)** (repositório separado): o OS Service roda neste cluster, no namespace `os-service`, atrás da rota `/os` e do NodePort 30081 criados aqui. O RDS dele fica nas subnets privadas desta rede.
 - **[BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658)** (repositório separado): o Billing roda neste cluster, no namespace `billing`, atrás da rota `/billing`, da rota pública do webhook do Mercado Pago e do NodePort 30082 criados aqui. O RDS dele fica nas subnets privadas desta rede.
@@ -20,7 +20,7 @@ Tudo fica na AWS, região `us-east-1`, em duas configurações Terraform indepen
 | [infra/foundation](infra/foundation) | `techchallenge-oficina/fase-4/k8s-foundation.tfstate` | VPC `10.0.0.0/16`, subnets públicas e privadas (2 AZs), Internet Gateway e rotas, SGs do cluster e dos nodes, IAM roles, EKS `techchallenge-oficina-eks` (1.36), node group `t3.small` (2/2/2), access entries e o acesso externo: API Gateway (HTTP API, com o Lambda authorizer, as rotas `/management`, `/os`, `/billing` e `/execution`, a rota pública do webhook do Mercado Pago e a rota `/auth/token` do repo LAMBDA), VPC Link e NLB interno (portas 30080 a 30083) |
 | [infra/addons](infra/addons) | `techchallenge-oficina/fase-4/k8s-addons.tfstate` | Metrics Server e Datadog Agent, via Helm (APM nos namespaces `oficina`, `os-service`, `billing` e `execution`), e os recursos do Datadog no módulo [modules/datadog/](infra/addons/modules/datadog): métricas de log, monitores, synthetics, SLO e dashboard das quatro APIs ([infra/DATADOG.md](infra/DATADOG.md)) |
 
-Os manifests em [k8s/](k8s) criam o namespace `oficina` e, para a Management API (`management-api`), um ConfigMap, um Deployment, um Service `NodePort` e um HPA. Também criam o Secret `oficina-api-secrets`, com a connection string, a chave do Resend e a chave do SQS. O Deployment leva os labels `tags.datadoghq.com/env` e `tags.datadoghq.com/service`, que dão ao Datadog o `env` e o `service` da API. Os manifests do OS Service (namespace `os-service`, `os-service-api`) ficam no repo OS-SERVICE, os do Billing (namespace `billing`, `billing-api`), no repo BILLING, e os do Execução e Produção (namespace `execution`, `execution-api`), no repo EXECUTION.
+Os manifests em [k8s/](k8s) criam o namespace `oficina` e, para a Management API (`management-api`), um ConfigMap, um Deployment, um Service `NodePort` e um HPA. Também criam o Secret `oficina-api-secrets`, com a connection string, a chave do Resend e a chave do usuário IAM da Management (SQS e DynamoDB). O Deployment leva os labels `tags.datadoghq.com/env` e `tags.datadoghq.com/service`, que dão ao Datadog o `env` e o `service` da API. Os manifests do OS Service (namespace `os-service`, `os-service-api`) ficam no repo OS-SERVICE, os do Billing (namespace `billing`, `billing-api`), no repo BILLING, e os do Execução e Produção (namespace `execution`, `execution-api`), no repo EXECUTION.
 
 ```mermaid
 flowchart TD
@@ -47,6 +47,7 @@ flowchart TD
     end
 
     SQS[Amazon SQS\nfilas FIFO - pasta SQS]
+    DDB[Amazon DynamoDB\nhistoricos - pasta DB e\nrepos dos outros servicos]
   end
 
   Internet -->|HTTPS| APIGW
@@ -59,11 +60,12 @@ flowchart TD
   EKS -->|PostgreSQL 5432| RDSB
   EKS -->|PostgreSQL 5432| RDSE
   EKS -->|HTTPS - eventos| SQS
+  EKS -->|HTTPS - historicos| DDB
   EKS -->|Datadog Agent - HTTPS| Datadog
   Datadog -.->|Synthetics - health das APIs| APIGW
 ```
 
-As subnets privadas não têm NAT nem rota para a Internet. Elas hospedam os bancos (pasta [DB/](../DB/README.md) e repos OS-SERVICE, BILLING e EXECUTION), o VPC Link e o NLB interno do API Gateway. Os pods chegam ao SQS pela saída das subnets públicas, como chegam ao ECR. Os detalhes da arquitetura estão em [infra/ESTRUTURA.md](infra/ESTRUTURA.md), e o passo a passo local em [infra/README.md](infra/README.md). A organização dos manifests está em [k8s/README.md](k8s/README.md), e a observabilidade com Datadog, em [infra/DATADOG.md](infra/DATADOG.md).
+As subnets privadas não têm NAT nem rota para a Internet. Elas hospedam os bancos (pasta [DB/](../DB/README.md) e repos OS-SERVICE, BILLING e EXECUTION), o VPC Link e o NLB interno do API Gateway. Os pods chegam ao SQS e às tabelas DynamoDB (as quatro APIs têm a sua) pela saída das subnets públicas, como chegam ao ECR. Os detalhes da arquitetura estão em [infra/ESTRUTURA.md](infra/ESTRUTURA.md), e o passo a passo local em [infra/README.md](infra/README.md). A organização dos manifests está em [k8s/README.md](k8s/README.md), e a observabilidade com Datadog, em [infra/DATADOG.md](infra/DATADOG.md).
 
 As decisões de arquitetura desta pasta ficam em [docs/](../docs), na raiz do monorepo:
 - [RFC-001: Escolha da nuvem](../docs/rfc/RFC-001-Escolha-da-Nuvem.md): por que AWS, na região `us-east-1`.
@@ -82,7 +84,7 @@ As partes do monorepo são aplicadas em ordem pelos jobs das pipelines ([.github
 | Subir | **Bootstrap** deste monorepo (testes → foundation → addons → RDS em `DB/` → imagem no ECR → manifests, com restart; o `SQS/` em paralelo, antes dos manifests) → **Bootstrap** do repo OS-SERVICE → **Bootstrap** do repo EXECUTION (o do BILLING a qualquer momento depois deste monorepo) → **Deploy** do repo LAMBDA |
 | Derrubar | **Destroy** dos repos LAMBDA, OS-SERVICE, BILLING e EXECUTION (em qualquer ordem) → **Destroy** deste monorepo (SQS em paralelo; RDS → addons → foundation) |
 
-- Os manifests são aplicados por último porque os pods precisam do RDS, para montar a connection string, da chave do SQS, no SSM, e da imagem no ECR. Depois de publicar a imagem, o Bootstrap e o Deploy aplicam os manifests com `rollout restart`: é assim que os pods passam a usar a nova `:latest`.
+- Os manifests são aplicados por último porque os pods precisam do RDS, para montar a connection string, da chave do usuário IAM da Management (SQS e DynamoDB), no SSM, e da imagem no ECR. Depois de publicar a imagem, o Bootstrap e o Deploy aplicam os manifests com `rollout restart`: é assim que os pods passam a usar a nova `:latest`.
 - O OS-SERVICE, o BILLING e o EXECUTION sobem depois porque usam o cluster, as rotas `/os`, `/billing` e `/execution`, o NLB, as subnets privadas e as filas criados aqui. O EXECUTION sobe depois do OS-SERVICE porque o OS Service precisa consumir os eventos novos (`DiagnosticoIniciado` e `ExecucaoFinalizada`) antes de o Execução e Produção publicá-los. Os três são destruídos antes porque o RDS de cada um fica nas subnets privadas, com um SG que referencia o SG dos nodes. Por isso, o Destroy deste monorepo **falha** se o RDS `techchallenge-oficina-os-postgres`, o `techchallenge-oficina-billing-postgres` ou o `techchallenge-oficina-execution-postgres`, ou o SG de um deles (`techchallenge-oficina-os-rds-sg`, `techchallenge-oficina-billing-rds-sg` e `techchallenge-oficina-execution-rds-sg`), ainda existirem.
 - O LAMBDA sobe depois porque as Lambdas usam a VPC e o RDS criados aqui, e é destruído antes porque a Lambda de busca de clientes fica nas subnets privadas, com uma regra no SG do RDS. Por isso, o Destroy deste monorepo **falha** se o SG `techchallenge-oficina-lambda-sg` ainda existir.
 - O Destroy apaga o RDS antes da rede. O RDS usa as subnets privadas, e o SG dele referencia o SG dos nodes, então apagar a rede antes travaria em `DependencyViolation`.
@@ -107,7 +109,7 @@ O `DB/infra` deste monorepo e os dos repos OS-SERVICE, BILLING e EXECUTION encon
 
 | De | Item | Uso |
 |---|---|---|
-| `DB/` | Identifier `techchallenge-oficina-postgres`, database `oficina`, usuário `sa`, porta `5432`, senha no secret `RDS_PASSWORD` | O apply dos manifests descobre o endpoint e monta `DatabaseSettings__ConnectionString` no Secret da API |
+| `DB/` | Identifier `techchallenge-oficina-postgres`, database `oficina`, usuário `sa`, porta `5432`, senha no secret `RDS_PASSWORD`; tabela DynamoDB `techchallenge-oficina-management-estoque-historico` | O apply dos manifests descobre o endpoint e monta `DatabaseSettings__ConnectionString` no Secret da API. O ConfigMap traz o nome da tabela (`DynamoDbSettings__TabelaHistoricoEstoque`) |
 | `SQS/` | Parâmetros SSM `/techchallenge-oficina/sqs/management/access-key-id` e `/secret-access-key`; fila `techchallenge-oficina-management.fifo` (consumo) e filas `techchallenge-oficina-os-service.fifo`, `techchallenge-oficina-billing.fifo` e `techchallenge-oficina-execution.fifo` (publicação) | O apply dos manifests grava a chave no Secret da API (`AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`), e o ConfigMap traz os nomes das filas |
 | Aplicação (`server/`) | Imagem `903936907231.dkr.ecr.us-east-1.amazonaws.com/techchallenge-oficina-management:latest`. O repositório ECR `techchallenge-oficina-management` é criado manualmente e não é gerenciado pelo Terraform | Deployment com `imagePullPolicy: Always`. O pull usa a role IAM dos nodes (`AmazonEC2ContainerRegistryReadOnly`) |
 | Aplicação (`server/`) | `GET /health/ready`, anônimo, que checa o banco. O `/health` continua igual, sem banco | `http_check` do Datadog Agent (service check `http.can_connect`). As probes do Kubernetes continuam em `/health` |
@@ -127,7 +129,7 @@ O `DB/infra` deste monorepo e os dos repos OS-SERVICE, BILLING e EXECUTION encon
    - API Gateway: `apigateway:*` em `/apis*`, `/vpclinks*` e `/tags*` (HTTP API, rotas, integrações, authorizer, stage e VPC Link).
    - Elastic Load Balancing: criar, alterar e apagar o NLB, os target groups e os listeners, com `elasticloadbalancing:AddTags` e `elasticloadbalancing:Describe*`.
    - Auto Scaling: `autoscaling:AttachLoadBalancerTargetGroups`, `autoscaling:DetachLoadBalancerTargetGroups` e `autoscaling:Describe*` (anexa o ASG do node group aos target groups).
-   - `rds:DescribeDBInstances` (apply dos manifests). As permissões para criar o RDS estão no [DB/README.md](../DB/README.md).
+   - `rds:DescribeDBInstances` (apply dos manifests). As permissões para criar o RDS e a tabela DynamoDB estão no [DB/README.md](../DB/README.md).
    - `ssm:GetParameter` nos parâmetros `/techchallenge-oficina/sqs/*` (apply dos manifests). As permissões para criar as filas, os usuários IAM e os parâmetros estão no [SQS/README.md](../SQS/README.md).
    - S3: `s3:GetObject`, `s3:PutObject` e `s3:DeleteObject` em `arn:aws:s3:::terraform-state-soat16/techchallenge-oficina/fase-4/*` (cobre também os states do `DB/`, do `SQS/` e dos repos OS-SERVICE, BILLING e EXECUTION), mais `s3:ListBucket` no bucket.
    - ECR: as permissões de push da imagem estão no [.github/workflows/README.md](../.github/workflows/README.md).
@@ -149,7 +151,7 @@ O `DB/infra` deste monorepo e os dos repos OS-SERVICE, BILLING e EXECUTION encon
 Há um único conjunto para o monorepo, todos no nível do **repositório**, não de environment. A tabela completa, com o uso de cada um, está no [.github/workflows/README.md](../.github/workflows/README.md). Os que esta pasta usa:
 - `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` (usuário IAM `terraform`), `AWS_REGION` (`us-east-1`) e `EKS_CLUSTER_NAME` (`techchallenge-oficina-eks`).
 - `RDS_PASSWORD`, `RDS_INSTANCE_IDENTIFIER` (`techchallenge-oficina-postgres`), `RDS_DATABASE` (`oficina`), `RDS_USERNAME` (`sa`) e `RESEND_API_KEY`, que montam o Secret da API. O `RDS_PASSWORD` é o mesmo secret que cria o RDS em `DB/`, e o repo LAMBDA precisa ter o mesmo valor.
-- A chave do SQS não é secret do GitHub: o apply dos manifests a lê do SSM ([SQS/README.md](../SQS/README.md)).
+- A chave do usuário IAM da Management (SQS e DynamoDB) não é secret do GitHub: o apply dos manifests a lê do SSM ([SQS/README.md](../SQS/README.md)).
 - `DD_API_KEY`, `DD_APP_KEY` e `DD_SITE`, obrigatórios exceto com `DD_ENABLED=false` **e** sem recursos do Datadog no state, e os opcionais `DD_ALERT_RECIPIENTS`, `DD_ENABLED` e `DD_SYNTHETICS_STATUS` ([infra/DATADOG.md](infra/DATADOG.md#22-secrets-e-variables-do-github)).
 
 Ao desligar o Datadog (`DD_ENABLED` de `true` para `false`), mantenha `DD_API_KEY`, `DD_APP_KEY` e `DD_SITE` válidos até o apply que desliga o Datadog terminar: é ele que apaga os recursos do Datadog, e para isso o provider precisa das chaves e do site da conta.
@@ -167,7 +169,7 @@ As pipelines ficam na raiz do monorepo e cobrem também a aplicação e o `DB/`.
 | **Bootstrap** | Manual | Sobe tudo: testes → `apply` da foundation → `apply` dos addons (Metrics Server e Datadog) → RDS (`DB/`) → imagem no ECR → apply dos manifests com `rollout restart`. O `SQS/` sobe em paralelo, antes dos manifests |
 | **Deploy** | Pull Request para `main` | `build-test` e `validate` offline de foundation, addons, `DB/`, `SQS/` e manifests (checks obrigatórios) → `plan` informativo de foundation, addons, `DB/` e `SQS/` |
 | **Deploy** | Push na `main` | Aplica só as partes que mudaram, na ordem do Bootstrap. Mudança em `kubernetes/infra/**`: apply da foundation → addons. Os manifests são reaplicados, com `rollout restart`, sempre que alguma parte muda (inclusive só `kubernetes/k8s/**` ou `SQS/infra/**`) |
-| **K8s Apply** | Manual (input `restart-pods`, padrão `true`) | Descobre o RDS, lê a chave do SQS no SSM, gera o Secret, `kubectl apply -k kubernetes/k8s` e, opcionalmente, `rollout restart` |
+| **K8s Apply** | Manual (input `restart-pods`, padrão `true`) | Descobre o RDS, lê no SSM a chave do usuário IAM da Management (SQS e DynamoDB), gera o Secret, `kubectl apply -k kubernetes/k8s` e, opcionalmente, `rollout restart` |
 | **Destroy** | Manual, `confirm = destroy` + aprovação | Confere que as Lambdas do repo LAMBDA (SG `techchallenge-oficina-lambda-sg`), o RDS do repo OS-SERVICE (RDS `techchallenge-oficina-os-postgres` e SG `techchallenge-oficina-os-rds-sg`), o RDS do repo BILLING (RDS `techchallenge-oficina-billing-postgres` e SG `techchallenge-oficina-billing-rds-sg`) e o RDS do repo EXECUTION (RDS `techchallenge-oficina-execution-postgres` e SG `techchallenge-oficina-execution-rds-sg`) já foram destruídos → destroy do SQS, em paralelo, e do RDS (`DB/`) → dos addons (inclui o Datadog Agent e os recursos do Datadog) → da foundation (inclui API Gateway, VPC Link e NLB), que roda mesmo se o dos addons falhar |
 
 Apply, K8s Apply e Destroy só rodam a partir da `main`. Disparados em outra branch, **falham** com erro.
@@ -206,7 +208,7 @@ O `validate` não precisa das chaves do Datadog. Para `plan` e `apply` locais do
 
 ## 7. Destruição e custos
 
-EKS, nodes, NLB, API Gateway (cobrado por requisição), o RDS (`DB/`), os RDS dos repos OS-SERVICE, BILLING e EXECUTION e o tráfego geram custo enquanto existem. As filas SQS ficam no nível gratuito ([SQS/README.md](../SQS/README.md#4-custo)).
+EKS, nodes, NLB, API Gateway (cobrado por requisição), o RDS (`DB/`), os RDS dos repos OS-SERVICE, BILLING e EXECUTION e o tráfego geram custo enquanto existem. As filas SQS ficam no nível gratuito ([SQS/README.md](../SQS/README.md#4-custo)), e as tabelas DynamoDB, sob demanda, custam perto de zero.
 
 **Datadog:** sem custo durante o trial de 14 dias, sem cartão. Depois dele, APM, logs e synthetics param (plano Free). Antes do fim, defina `DD_ENABLED=false` e rode o Bootstrap, ou rode o Destroy. Nunca cadastre cartão ([infra/DATADOG.md](infra/DATADOG.md#4-trial-de-14-dias)).
 
@@ -228,7 +230,7 @@ O bucket S3 do state não é removido.
 - **`no matching IAM User found` / erro em `aws_iam_user.cluster_admin`**: crie o usuário IAM `cluster_admin` (seção 3).
 - **Addons ou apply dos manifests sem acesso ao cluster (`Unauthorized`)**: a foundation foi aplicada por outro usuário IAM, e a access entry mudou. Reaplique a foundation com o usuário `terraform`.
 - **Apply dos manifests falha em "Descobrir endpoint do RDS"**: o RDS (`DB/`) não existe ou ainda está sendo criado. Rode o Bootstrap e aguarde.
-- **Apply dos manifests falha em "Adicionar a chave do SQS"**: os parâmetros do SSM não existem, porque o `SQS/` ainda não foi aplicado. Rode o Bootstrap.
+- **Apply dos manifests falha em "Adicionar a chave do usuário IAM da Management (SQS e DynamoDB) ao kubernetes/k8s/.env"**: os parâmetros do SSM não existem, porque o `SQS/` ainda não foi aplicado. Rode o Bootstrap.
 - **Destroy falha em "Verificar se o RDS do repo OS-SERVICE já foi destruído"** (ou **"... do repo BILLING ..."** ou **"... do repo EXECUTION ..."**): rode antes o Destroy do repo indicado. Se ele acabou de rodar, aguarde a exclusão do RDS terminar e tente de novo.
 - **Pods em `ImagePullBackOff`**: a imagem ainda não foi publicada no ECR (repositório `techchallenge-oficina-management`, seção 3). Rode o Bootstrap.
 - **Destroy falha em "Verificar se as Lambdas do repo LAMBDA já foram destruídas"**: rode antes o Destroy do repo LAMBDA. Se ele acabou de rodar, aguarde e tente de novo: o SG `techchallenge-oficina-lambda-sg` só some depois que a AWS libera as interfaces de rede da Lambda.

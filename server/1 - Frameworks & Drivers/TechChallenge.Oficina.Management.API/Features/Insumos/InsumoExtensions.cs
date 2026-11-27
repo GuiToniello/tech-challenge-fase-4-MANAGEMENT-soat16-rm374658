@@ -34,6 +34,17 @@ namespace TechChallenge.Oficina.Management.API.Features.Insumos
                 .Produces<InsumoViewModel>(StatusCodes.Status200OK)
                 .Produces(StatusCodes.Status404NotFound);
 
+            // Historico de movimentacoes de estoque do insumo (DynamoDB), em ordem cronologica: cadastro, ajustes e debitos por ordem de servico.
+            // Nao consulta o PostgreSQL: insumo excluido ou desconhecido tambem responde 200, com o que houver no historico (ou lista vazia)
+            group.MapGet(
+                "/{id:guid}/movimentacoes",
+                (
+                    IInsumoController insumoController,
+                    Guid id,
+                    CancellationToken cancellationToken
+                ) => insumoController.GetMovimentacoes(id, cancellationToken))
+                .Produces<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>(StatusCodes.Status200OK);
+
             group.MapGet(
                 string.Empty,
                 (

@@ -37,4 +37,9 @@ locals {
       publishes_to = ["os-service"]
     }
   }
+
+  # Tabela DynamoDB do historico de movimentacoes de estoque da Management, usada so no ARN da politica
+  # em iam.tf. A tabela e criada pelo DB/infra deste repo, em outro state, por isso o nome e repetido
+  # aqui: precisa ser igual ao de DB/infra/dynamodb.tf.
+  tabela_historico_estoque_management = "${var.project_name}-management-estoque-historico"
 }

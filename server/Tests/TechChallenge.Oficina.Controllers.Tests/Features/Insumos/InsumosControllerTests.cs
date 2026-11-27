@@ -232,6 +232,64 @@ public sealed class InsumosControllerTests
         Assert.Empty(value);
     }
 
+    [Fact]
+    public async Task GetMovimentacoes_DeveRepassarIdECancellationTokenERetornarAdaptado()
+    {
+        ConfigurarAdapterParaMovimentacoesResult();
+        var controller = CriarController();
+        var id = Guid.NewGuid();
+        using var cancelamento = new CancellationTokenSource();
+        IReadOnlyCollection<MovimentacaoEstoqueViewModel> movimentacoes =
+        [
+            new MovimentacaoEstoqueViewModel { Tipo = "Cadastro", Origem = "acao", Quantidade = 10, SaldoAnterior = 0, SaldoNovo = 10 },
+            new MovimentacaoEstoqueViewModel { Tipo = "Ajuste", Origem = "acao", Quantidade = 5, SaldoAnterior = 10, SaldoNovo = 15 }
+        ];
+
+        _serviceMock
+            .Setup(service => service.ListarMovimentacoesAsync(It.Is<ListarMovimentacoesEstoqueQuery>(q => q.Id == id), cancelamento.Token))
+            .ReturnsAsync(movimentacoes);
+
+        var response = await controller.GetMovimentacoes(id, cancelamento.Token);
+        var resultado = Assert.IsType<InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>>(response);
+
+        Assert.Same(movimentacoes, resultado.Value);
+        Assert.Null(resultado.Error);
+    }
+
+    [Fact]
+    public async Task GetMovimentacoes_DeveRetornarColecaoVazia_QuandoSemMovimentacoes()
+    {
+        ConfigurarAdapterParaMovimentacoesResult();
+        var controller = CriarController();
+
+        _serviceMock
+            .Setup(service => service.ListarMovimentacoesAsync(It.IsAny<ListarMovimentacoesEstoqueQuery>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var response = await controller.GetMovimentacoes(Guid.NewGuid(), CancellationToken.None);
+        var resultado = Assert.IsType<InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>>(response);
+
+        Assert.NotNull(resultado.Value);
+        Assert.Empty(resultado.Value);
+        Assert.Null(resultado.Error);
+    }
+
+    [Fact]
+    public async Task GetMovimentacoes_DevePropagarFalhaDoDynamoDbSemAdaptar()
+    {
+        // A falha ja sai como integracao.falha no gateway do historico; o tratamento global responde 500
+        var controller = CriarController();
+
+        _serviceMock
+            .Setup(service => service.ListarMovimentacoesAsync(It.IsAny<ListarMovimentacoesEstoqueQuery>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("DynamoDB indisponivel"));
+
+        var action = async () => await controller.GetMovimentacoes(Guid.NewGuid(), CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
+        Assert.Empty(_adapterMock.Invocations);
+    }
+
     private void ConfigurarAdapterParaInsumoResult()
     {
         _adapterMock
@@ -244,6 +302,13 @@ public sealed class InsumosControllerTests
         _adapterMock
             .Setup(adapter => adapter.Adapt(It.IsAny<InsumoResult<IReadOnlyCollection<InsumoViewModel>, Exception>>()))
             .Returns((InsumoResult<IReadOnlyCollection<InsumoViewModel>, Exception> result) => result);
+    }
+
+    private void ConfigurarAdapterParaMovimentacoesResult()
+    {
+        _adapterMock
+            .Setup(adapter => adapter.Adapt(It.IsAny<InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>>()))
+            .Returns((InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception> result) => result);
     }
 
     private void ConfigurarAdapterParaBoolResult()

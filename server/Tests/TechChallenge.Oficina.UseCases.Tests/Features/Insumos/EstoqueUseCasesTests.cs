@@ -1,4 +1,5 @@
 using Moq;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 using TechChallenge.Oficina.Entities.Exceptions;
 using TechChallenge.Oficina.Entities.Features.Insumos;
@@ -112,6 +113,41 @@ public sealed class EstoqueUseCasesTests
         Assert.Equal(4, insumoFiltro.QuantidadeDisponivel);
         _insumoRepositoryMock.Verify(r => r.AtualizarAsync(insumoOleo, It.IsAny<CancellationToken>()), Times.Once);
         _insumoRepositoryMock.Verify(r => r.AtualizarAsync(insumoFiltro, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DebitarEstoqueParaOrdemServicoAsync_DeveRetornarODebitoDeCadaInsumoComOsSaldos()
+    {
+        var service = CriarService();
+        var insumoOleo = Insumo.Criar("Oleo", "Bosch", 10, 19.9m);
+        var insumoFiltro = Insumo.Criar("Filtro", "Fram", 5, 39.9m);
+        var servicos = new[]
+        {
+            CriarServicoComItens("Revisao", (insumoOleo, 2), (insumoFiltro, 1)),
+            CriarServicoComItens("Troca de Oleo", (insumoOleo, 3))
+        };
+
+        _insumoRepositoryMock.Setup(r => r.ObterPorIdAsync(insumoOleo.Id, It.IsAny<CancellationToken>())).ReturnsAsync(insumoOleo);
+        _insumoRepositoryMock.Setup(r => r.ObterPorIdAsync(insumoFiltro.Id, It.IsAny<CancellationToken>())).ReturnsAsync(insumoFiltro);
+
+        var debitos = await service.DebitarEstoqueParaOrdemServicoAsync(servicos);
+
+        // Um debito por insumo (quantidades dos servicos somadas), com o saldo antes e depois
+        Assert.Equal(2, debitos.Count);
+        Assert.Contains(new DebitoInsumo(insumoOleo.Id, 5, 10, 5), debitos);
+        Assert.Contains(new DebitoInsumo(insumoFiltro.Id, 1, 5, 4), debitos);
+    }
+
+    [Fact]
+    public async Task DebitarEstoqueParaOrdemServicoAsync_DeveRetornarListaVazia_QuandoServicosNaoPossuemInsumos()
+    {
+        var service = CriarService();
+        var servicos = new[] { Servico.Criar("Diagnostico", "Diagnostico eletronico", []) };
+
+        var debitos = await service.DebitarEstoqueParaOrdemServicoAsync(servicos);
+
+        Assert.Empty(debitos);
+        _insumoRepositoryMock.Verify(r => r.AtualizarAsync(It.IsAny<Insumo>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

@@ -208,6 +208,46 @@ public sealed class EventosIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task PagamentoAprovado_DeveRegistrarODebitoNoHistoricoDeMovimentacoesUmaUnicaVez()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture);
+        var ordemServicoId = Guid.NewGuid();
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemServicoId, clienteId, veiculoId, servicoId);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemServicoId));
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemServicoId));
+
+        // Cadastro do insumo (20 unidades) e o debito das 4 do servico; o pagamento repetido e ignorado e nao gera outro registro
+        var movimentacoes = await CenarioOrdemServico.ObterMovimentacoesAsync(_fixture, insumoId);
+        Assert.Equal(["Cadastro", "DebitoOrdemServico"], movimentacoes.Select(movimentacao => movimentacao.Tipo));
+        var debito = movimentacoes[1];
+        Assert.Equal("evento", debito.Origem);
+        Assert.Equal(ordemServicoId, debito.OrdemServicoId);
+        Assert.Equal((-4, 20, 16), (debito.Quantidade, debito.SaldoAnterior, debito.SaldoNovo));
+        Assert.Equal(16, await ObterEstoqueAsync(insumoId));
+    }
+
+    [Fact]
+    public async Task PagamentoAprovado_SemDebito_NaoDeveRegistrarNoHistoricoDeMovimentacoes()
+    {
+        var (clienteId, veiculoId, insumoId, servicoId) = await CenarioOrdemServico.CriarCadastrosAsync(_fixture, quantidadeDisponivel: 6);
+        var ordemA = Guid.NewGuid();
+        var ordemB = Guid.NewGuid();
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemA, clienteId, veiculoId, servicoId);
+        await CenarioOrdemServico.AbrirOrdemServicoAsync(_fixture, ordemB, clienteId, veiculoId, servicoId);
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemA));
+
+        // Estoque consumido pela ordem A (falha do debito, os.falha) e OS desconhecida: nenhum dos dois vai para o historico
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, ordemB));
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, await CenarioOrdemServico.AprovarPagamentoAsync(_fixture, Guid.NewGuid()));
+
+        var debito = Assert.Single(_fixture.HistoricoEstoque.Movimentacoes, movimentacao => movimentacao.Tipo == "DebitoOrdemServico");
+        Assert.Equal(insumoId, debito.InsumoId);
+        Assert.Equal(ordemA, debito.OrdemServicoId);
+        Assert.Equal((-4, 6, 2), (debito.Quantidade, debito.SaldoAnterior, debito.SaldoNovo));
+    }
+
+    [Fact]
     public async Task EventoNaoTratado_DeveSerIgnorado()
     {
         var resultado = await _fixture.CriarEventosController().ProcessarAsync(nameof(OrdemServicoValidada), "{}", CancellationToken.None);

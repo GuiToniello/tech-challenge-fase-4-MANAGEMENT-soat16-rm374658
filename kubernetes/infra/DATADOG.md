@@ -154,7 +154,7 @@ O `evento` também traz nomes de eventos do framework; por isso as métricas fil
 | 1002 | `os.status_alterado` | Information | `os-service-api` | `OrdemServicoId`, `StatusAnterior`, `StatusNovo`, `Etapa`, `TempoNoStatusAnteriorSegundos` (número) |
 | 1003 | `os.encerrada` | Information | `os-service-api` | `OrdemServicoId`, `TempoTotalSegundos` (número). A OS é encerrada na entrega (status Entregue) |
 | 2001 | `os.falha` | Warning | Os quatro | `Etapa`, `OrdemServicoId`, `TipoFalha`, `Motivo` |
-| 3001 | `integracao.falha` | Error (SQS, envio do orçamento, Mercado Pago e consulta no DynamoDB) / Warning (notificação de status e gravação no DynamoDB) | Os quatro (Resend na Management e no Billing; Mercado Pago só no Billing; DynamoDB no Billing, no OS Service e no Execução e Produção) | `Integracao`, `Operacao`, `OrdemServicoId`; na notificação, também `StatusNovo`; no SQS, também `Tipo` e `Fila` (na publicação, a fila que falhou) e, no consumo, `EventoId` e `MessageId` (`MensagemId` no OS Service, no Billing e no Execução e Produção) |
+| 3001 | `integracao.falha` | Error (SQS, envio do orçamento, Mercado Pago e consulta no DynamoDB) / Warning (notificação de status e gravação no DynamoDB) | Os quatro (Resend na Management e no Billing; Mercado Pago só no Billing; DynamoDB nos quatro) | `Integracao`, `Operacao`, `OrdemServicoId`; na notificação, também `StatusNovo`; no SQS, também `Tipo` e `Fila` (na publicação, a fila que falhou) e, no consumo, `EventoId` e `MessageId` (`MensagemId` no OS Service, no Billing e no Execução e Produção); no histórico de movimentações de estoque da Management (DynamoDB), `InsumoId` no lugar do `OrdemServicoId` e, na gravação, `Tipo` |
 | 4001 | `evento.publicado` | Information | Os quatro (um log por fila de destino) | `Tipo`, `EventoId`, `OrdemServicoId`, `Fila` |
 | 4002 | `evento.consumido` | Information | Os quatro | `Tipo`, `EventoId`, `Fila` |
 | 4003 | `evento.ignorado` | Information (Management) / Warning (os outros três) | Os quatro | `Tipo`, `EventoId`, `Fila` |
@@ -170,7 +170,7 @@ Os eventos do orçamento e do pagamento (`os.orcamento_*`, que saíram da Manage
 | `Etapa` | `abertura`, `atualizacao`, `exclusao`, `diagnostico`, `orcamento_geracao`, `orcamento_envio`, `orcamento_aprovacao`, `orcamento_recusa`, `execucao` (só no Execução e Produção), `finalizacao`, `entrega`, `cancelamento`, `estoque_debito` (Management) e, no Billing, `pagamento_verificacao` e `pagamento_notificacao` |
 | `TipoFalha` | `regra_negocio` (DomainException), `nao_encontrado` (KeyNotFoundException) |
 | `StatusAnterior` / `StatusNovo` | `recebida`, `em_diagnostico`, `aguardando_aprovacao`, `em_execucao`, `finalizada`, `entregue`, `encerrada`, `cancelada` |
-| `Integracao` | `resend`, `mercadopago`, `postgres`, `sqs`, `dynamodb` (Billing, OS Service e Execução e Produção) |
+| `Integracao` | `resend`, `mercadopago`, `postgres`, `sqs`, `dynamodb` (os quatro: Management, OS Service, Billing e Execução e Produção) |
 | `Operacao` | `envio_orcamento`, `notificacao_status`, `criacao_cobranca`, `consulta_pagamento`, `publicacao`, `consumo`, `registro_historico` e `consulta_historico` (DynamoDB) |
 
 ### 5.4 Métricas de log

@@ -140,6 +140,40 @@ public sealed class InsumoAdapterTests
     }
 
     [Fact]
+    public void Adapt_DeveRetornarOk_QuandoMovimentacoesComSucesso()
+    {
+        IReadOnlyCollection<MovimentacaoEstoqueViewModel> movimentacoes = [new MovimentacaoEstoqueViewModel { Tipo = "Cadastro", Origem = "acao", Quantidade = 10, SaldoNovo = 10 }];
+        var result = new InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>(movimentacoes);
+
+        var adaptado = _adapter.Adapt(result);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>>(adaptado);
+        Assert.Same(movimentacoes, ok.Value);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarOkComListaVazia_QuandoSemMovimentacoes()
+    {
+        var result = new InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>(Array.Empty<MovimentacaoEstoqueViewModel>());
+
+        var adaptado = _adapter.Adapt(result);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>>(adaptado);
+        Assert.Empty(ok.Value!);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarProblem_QuandoFalhaNaConsultaDasMovimentacoes()
+    {
+        var result = new InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception>(new InvalidOperationException("falha"));
+
+        var adaptado = _adapter.Adapt(result);
+
+        var problem = Assert.IsType<ProblemHttpResult>(adaptado);
+        Assert.Equal(StatusCodes.Status500InternalServerError, problem.StatusCode);
+    }
+
+    [Fact]
     public void Empty_DeveRetornarNoContent()
     {
         var adaptado = _adapter.Empty();

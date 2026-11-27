@@ -1,7 +1,8 @@
 name: Bootstrap
-# Sobe o ambiente inteiro, na ordem: testes → VPC/EKS/API Gateway → addons → RDS → imagem no ECR → manifests.
-# As filas SQS (com usuários IAM e chaves no SSM dos 4 serviços, inclusive o Execução e Produção) sobem em paralelo,
-# logo depois dos testes, e antes dos manifests.
+# Sobe o ambiente inteiro, na ordem: testes → VPC/EKS/API Gateway → addons → RDS e tabela DynamoDB do histórico de
+# estoque (DB/infra) → imagem no ECR → manifests.
+# As filas SQS (com usuários IAM e chaves no SSM dos 4 serviços, inclusive o Execução e Produção, e a política
+# DynamoDB do usuário da Management) sobem em paralelo, logo depois dos testes, e antes dos manifests.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
 # Depois dele, rode os Bootstraps dos repos OS-SERVICE, BILLING e EXECUTION (usam a VPC, o EKS, as rotas /os, /billing
 # e /execution do API Gateway e as filas SQS criados aqui): o OS-SERVICE antes do EXECUTION, porque o OS Service
@@ -28,7 +29,8 @@ jobs:
       command: apply
     secrets: inherit
 
-  # Não depende da VPC nem do EKS. O k8s-apply lê a chave da Management no SSM
+  # Não depende da VPC nem do EKS. O k8s-apply lê a chave da Management no SSM. A política da tabela DynamoDB da
+  # Management fica aqui, no mesmo state do usuário IAM, e não no terraform-db (os dois rodam em paralelo)
   terraform-sqs:
     needs: build-test
     uses: ./.github/workflows/_terraform.yml
@@ -45,6 +47,7 @@ jobs:
       command: apply
     secrets: inherit
 
+  # RDS e tabela DynamoDB do histórico de movimentações de estoque (a política da tabela vai no terraform-sqs)
   terraform-db:
     needs: terraform-addons
     uses: ./.github/workflows/_terraform.yml

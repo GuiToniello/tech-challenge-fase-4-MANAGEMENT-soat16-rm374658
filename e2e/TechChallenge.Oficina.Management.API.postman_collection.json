@@ -1900,6 +1900,57 @@
                             }
                         }
                     ]
+                },
+                {
+                    "name": "14 - Movimentacoes do Insumo (200)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{baseUrl}}/api/insumos/{{insumos_id}}/movimentacoes",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "insumos",
+                                "{{insumos_id}}",
+                                "movimentacoes"
+                            ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "// Historico de movimentacoes de estoque (DynamoDB): o insumo foi excluido no passo 12, mas o historico continua disponivel (ate o TTL)",
+                                    "const quantidadeInicial = 10; // quantidadeDisponivel enviada no passo 01",
+                                    "const quantidadeAjustada = 15; // quantidadeDisponivel enviada no passo 04",
+                                    "pm.test(\u0027Status 200\u0027, function () { pm.response.to.have.status(200); });",
+                                    "const movimentacoes = pm.response.json();",
+                                    "pm.test(\u0027Cadastro e ajuste, em ordem cronologica\u0027, function () {",
+                                    "  pm.expect(movimentacoes).to.be.an(\u0027array\u0027).with.lengthOf(2);",
+                                    "  pm.expect(movimentacoes.map(function (movimentacao) { return movimentacao.tipo; })).to.eql([\u0027Cadastro\u0027, \u0027Ajuste\u0027]);",
+                                    "});",
+                                    "pm.test(\u0027Cadastro com o saldo inicial do passo 01\u0027, function () {",
+                                    "  const cadastro = movimentacoes[0] || {};",
+                                    "  pm.expect(cadastro.origem).to.eql(\u0027acao\u0027);",
+                                    "  pm.expect(cadastro.quantidade).to.eql(quantidadeInicial);",
+                                    "  pm.expect(cadastro.saldoAnterior).to.eql(0);",
+                                    "  pm.expect(cadastro.saldoNovo).to.eql(quantidadeInicial);",
+                                    "});",
+                                    "pm.test(\u0027Ajuste para o saldo do passo 04\u0027, function () {",
+                                    "  const ajuste = movimentacoes[1] || {};",
+                                    "  pm.expect(ajuste.origem).to.eql(\u0027acao\u0027);",
+                                    "  pm.expect(ajuste.quantidade).to.eql(quantidadeAjustada - quantidadeInicial);",
+                                    "  pm.expect(ajuste.saldoAnterior).to.eql(quantidadeInicial);",
+                                    "  pm.expect(ajuste.saldoNovo).to.eql(quantidadeAjustada);",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ]
                 }
             ]
         },

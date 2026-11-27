@@ -99,7 +99,7 @@ kubectl get pods -A
 
 Os manifests da API ficam em [k8s/](../k8s), e o passo a passo está em [k8s/README.md](../k8s/README.md). Antes de aplicá-los, é preciso ter o RDS criado pelo `DB/infra` ([DB/README.md](../../DB/README.md)) e a imagem da Management API publicada no ECR (repositório `techchallenge-oficina-management`). O Bootstrap faz os dois antes de aplicar os manifests.
 
-O caminho recomendado é o workflow **K8s Apply**, que descobre o endpoint do RDS, gera o `kubernetes/k8s/.env` a partir dos secrets do GitHub e da chave do SQS guardada no SSM (`/techchallenge-oficina/sqs/management/*`, criada pelo `SQS/infra`, veja o [SQS/README.md](../../SQS/README.md)) e roda `kubectl apply -k kubernetes/k8s`. Aplique sempre com `-k` (e não `-f` por pasta), porque o Secret `oficina-api-secrets` é gerado pelo Kustomize a partir do `kubernetes/k8s/.env`.
+O caminho recomendado é o workflow **K8s Apply**, que descobre o endpoint do RDS, gera o `kubernetes/k8s/.env` a partir dos secrets do GitHub e da chave do usuário IAM da Management guardada no SSM (`/techchallenge-oficina/sqs/management/*`, criada pelo `SQS/infra`, que serve às filas SQS e à tabela DynamoDB do histórico de movimentações de estoque; veja o [SQS/README.md](../../SQS/README.md)) e roda `kubectl apply -k kubernetes/k8s`. Aplique sempre com `-k` (e não `-f` por pasta), porque o Secret `oficina-api-secrets` é gerado pelo Kustomize a partir do `kubernetes/k8s/.env`.
 
 Valide:
 

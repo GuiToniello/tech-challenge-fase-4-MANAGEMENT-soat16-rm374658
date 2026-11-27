@@ -4,16 +4,16 @@
 
 Software de gestão para uma oficina mecânica.
 
-Tech Challenge da Fase 4 do curso SOAT16 da FIAP. Este é o **monorepo do serviço Management**, com quatro partes: a aplicação (.NET), o banco (Amazon RDS), as filas (Amazon SQS) e o cluster com a borda (Amazon EKS e API Gateway). Na fase 3, a aplicação, o banco e o cluster ficavam em três repositórios separados (APP, DB e K8S).
+Tech Challenge da Fase 4 do curso SOAT16 da FIAP. Este é o **monorepo do serviço Management**, com quatro partes: a aplicação (.NET), o banco (Amazon RDS PostgreSQL e uma tabela do Amazon DynamoDB, com o histórico de movimentações de estoque), as filas (Amazon SQS) e o cluster com a borda (Amazon EKS e API Gateway). Na fase 3, a aplicação, o banco e o cluster ficavam em três repositórios separados (APP, DB e K8S).
 
 O sistema tem cinco repositórios:
-- **MANAGEMENT** (este): cadastros (clientes, veículos, serviços e insumos), estoque, validação da OS e o e-mail de mudança de status. Também cria a rede, o cluster, o API Gateway, o Datadog e as filas usados pelos outros serviços.
+- **MANAGEMENT** (este): cadastros (clientes, veículos, serviços e insumos), estoque (com o histórico de movimentações), validação da OS e o e-mail de mudança de status. Também cria a rede, o cluster, o API Gateway, o Datadog e as filas usados pelos outros serviços.
 - [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658): o microsserviço de ordens de serviço (OS), com banco próprio. Na fase 4, o ciclo de vida da OS saiu deste repositório e foi para lá ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md)).
 - [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658): o microsserviço de orçamento e pagamento (Mercado Pago), com banco próprio. Na fase 4, o orçamento também saiu deste repositório e foi para lá ([ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)).
 - [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658): o microsserviço de Execução e Produção, com banco próprio: a fila de produção da oficina, o início do diagnóstico e o início e a finalização da execução ([ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md)). Ele avisa o OS Service por eventos; quem muda o status da OS continua sendo o OS Service.
 - [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658): as Lambdas de autenticação.
 
-A Management, o OS Service, o Billing e o Execução e Produção se comunicam só por eventos no Amazon SQS ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro.
+A Management, o OS Service, o Billing e o Execução e Produção se comunicam só por eventos no Amazon SQS ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro. Além do próprio banco e do SQS, a Management usa uma tabela do Amazon DynamoDB, com o histórico de movimentações de estoque de cada insumo ([ADR-027](./docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)); o OS Service, o Billing e o Execução e Produção têm cada um a sua, nos repositórios deles.
 
 Grupo:
 -  Guilherme Toniello Vieira -  SOAT16 - rm374658
@@ -24,10 +24,10 @@ Grupo:
 /
 ├── server/               Solução .NET: Management API, camadas da Clean Architecture e testes
 ├── e2e/                  Collection do Postman da Management API (cadastros) e environment da AWS
-├── docker-compose.yml    Postgres + ElasticMQ (SQS local) + Management API para rodar localmente
+├── docker-compose.yml    Postgres + ElasticMQ (SQS local) + DynamoDB Local + Management API para rodar localmente
 ├── elasticmq.conf        Filas FIFO do ElasticMQ, as mesmas do SQS na AWS
-├── DB/                   Terraform do Amazon RDS PostgreSQL
-├── SQS/                  Terraform das filas Amazon SQS FIFO, dos usuários IAM e das chaves no SSM
+├── DB/                   Terraform do Amazon RDS PostgreSQL e da tabela DynamoDB da Management
+├── SQS/                  Terraform das filas Amazon SQS FIFO, dos usuários IAM (com a política DynamoDB da Management) e das chaves no SSM
 ├── kubernetes/           Terraform da VPC, EKS, API Gateway, NLB e addons (Datadog), e os manifests Kubernetes
 ├── docs/                 Arquitetura, observabilidade, ADRs e RFCs
 └── .github/workflows/    Pipelines (build, testes, imagem, Terraform e deploy no cluster)
@@ -37,8 +37,8 @@ Grupo:
 |---|---|---|
 | [server/](./server/) | Código .NET 10 da `TechChallenge.Oficina.Management.API` e testes | Seções 2 a 4 deste README |
 | [e2e/](./e2e/) | Collection do Postman e environment da AWS | Seção 8 |
-| [DB/](./DB/) | Amazon RDS PostgreSQL (state `techchallenge-oficina/fase-4/database.tfstate`) | [DB/README.md](./DB/README.md) |
-| [SQS/](./SQS/) | Filas FIFO entre a Management, o OS Service, o Billing e o Execução e Produção, com DLQ, usuários IAM e chaves no SSM Parameter Store (state `techchallenge-oficina/fase-4/sqs.tfstate`) | [SQS/README.md](./SQS/README.md) |
+| [DB/](./DB/) | Amazon RDS PostgreSQL e a tabela DynamoDB do histórico de movimentações de estoque (state `techchallenge-oficina/fase-4/database.tfstate`) | [DB/README.md](./DB/README.md) |
+| [SQS/](./SQS/) | Filas FIFO entre a Management, o OS Service, o Billing e o Execução e Produção, com DLQ, usuários IAM (o da Management também com a política da tabela DynamoDB) e chaves no SSM Parameter Store (state `techchallenge-oficina/fase-4/sqs.tfstate`) | [SQS/README.md](./SQS/README.md) |
 | [kubernetes/](./kubernetes/) | `infra/foundation` (VPC, EKS, API Gateway, VPC Link e NLB, com as rotas das quatro APIs), `infra/addons` (Metrics Server, Datadog Agent e recursos do Datadog) e `k8s/` (manifests da Management API, via Kustomize) | [kubernetes/README.md](./kubernetes/README.md) |
 | [docs/](./docs/) | Visão geral, contrato de observabilidade, ADRs e RFCs | [docs/arquitetura.md](./docs/arquitetura.md) |
 | [.github/workflows/](./.github/workflows/) | Bootstrap, Deploy, Destroy e K8s Apply | [.github/workflows/README.md](./.github/workflows/README.md) |
@@ -66,6 +66,7 @@ flowchart LR
     DB[TechChallenge.Oficina.DB\nEF Core + PostgreSQL]
     Email[TechChallenge.Oficina.Email\nResend]
     Messaging[TechChallenge.Oficina.Messaging\nAmazon SQS]
+    NoSql[TechChallenge.Oficina.NoSql\nAmazon DynamoDB]
   end
   subgraph IA[2 - Interface Adapters]
     Controllers[TechChallenge.Oficina.Controllers]
@@ -83,17 +84,18 @@ flowchart LR
   Adapters --> Controllers
   DB --> UseCases
   Email --> UseCases
+  NoSql --> UseCases
   Messaging --> Controllers
   Messaging --> UseCases
   Controllers --> UseCases
   UseCases --> Entities
 ```
 
-A mensageria segue o mesmo padrão do e-mail: os casos de uso publicam eventos pela porta `IEventosPublisher`, e o projeto `TechChallenge.Oficina.Messaging` implementa a publicação e o consumidor da fila. O evento consumido entra pelo `EventosController`, como uma requisição HTTP entra por um endpoint ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)).
+A mensageria segue o mesmo padrão do e-mail: os casos de uso publicam eventos pela porta `IEventosPublisher`, e o projeto `TechChallenge.Oficina.Messaging` implementa a publicação e o consumidor da fila. O evento consumido entra pelo `EventosController`, como uma requisição HTTP entra por um endpoint ([ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)). O histórico de movimentações de estoque segue o mesmo padrão: os casos de uso gravam e consultam pela porta `IHistoricoEstoqueGateway`, e o projeto `TechChallenge.Oficina.NoSql` a implementa com o SDK do DynamoDB (seção 2.4).
 
 ### 2.1. Visão Geral
 
-As decisões arquiteturais estão documentadas como ADRs (Architecture Decision Records) em [docs/adr/](./docs/adr/). As RFCs (Request for Comments) são propostas que compararam opções antes de uma decisão e ficam em [docs/rfc/](./docs/rfc/). A numeração é compartilhada com os repositórios OS-SERVICE, que guarda a ADR-019 e a ADR-026, BILLING, que guarda a ADR-021, a ADR-022 e a ADR-024, EXECUTION, que guarda a ADR-023 e a ADR-025, e LAMBDA, que guarda a RFC-003.
+As decisões arquiteturais estão documentadas como ADRs (Architecture Decision Records) em [docs/adr/](./docs/adr/). As RFCs (Request for Comments) são propostas que compararam opções antes de uma decisão e ficam em [docs/rfc/](./docs/rfc/). A numeração é compartilhada com os repositórios OS-SERVICE, que guarda a ADR-019 e a ADR-026, BILLING, que guarda a ADR-021, a ADR-022 e a ADR-024, EXECUTION, que guarda a ADR-023 e a ADR-025, e LAMBDA, que guarda a RFC-003. As demais, inclusive a ADR-027, ficam neste monorepo.
 
 | ADR | Resumo | Link |
 |-----|--------|------|
@@ -122,6 +124,7 @@ As decisões arquiteturais estão documentadas como ADRs (Architecture Decision 
 | ADR-024 — Histórico de pagamentos no Amazon DynamoDB (repo BILLING) | O Billing grava o histórico dos eventos de pagamento de cada OS numa tabela DynamoDB (NoSQL), em *best-effort* e com expiração em 180 dias. O PostgreSQL continua sendo a fonte da verdade. | [ver](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) |
 | ADR-025 — Linha do tempo da produção no Amazon DynamoDB (repo EXECUTION) | O Execução e Produção grava cada passo da produção de cada OS (diagnóstico, entrada na fila, início e fim da execução) numa tabela DynamoDB (NoSQL) própria, em *best-effort* e com expiração em 180 dias, no mesmo padrão do histórico de pagamentos do Billing. O PostgreSQL continua sendo a fonte da verdade. | [ver](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md) |
 | ADR-026 — Histórico da saga no Amazon DynamoDB (repo OS-SERVICE) | O OS Service grava o que fez com cada evento da saga que consome (processado, com o status antes e depois, ou ignorado, com o motivo) numa tabela DynamoDB (NoSQL) própria, em *best-effort* e com expiração em 180 dias, no mesmo padrão do Billing e do Execução e Produção. O PostgreSQL continua sendo a fonte da verdade. | [ver](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md) |
+| ADR-027 — Histórico de movimentações de estoque no Amazon DynamoDB | A Management grava cada movimentação de estoque de um insumo (cadastro, ajuste do saldo e débito do pagamento aprovado, com o saldo antes e depois) numa tabela DynamoDB (NoSQL) própria, em *best-effort* e com expiração em 180 dias, no mesmo padrão dos outros três serviços. A política da tabela fica no `SQS/infra`, junto do usuário IAM da Management. O saldo no PostgreSQL continua sendo a fonte da verdade. | [ver](./docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md) |
 
 | RFC | Resumo | Link |
 |-----|--------|------|
@@ -171,6 +174,19 @@ A separação acontece na **camada de UseCases** (`3 - Application Business Rule
 - `UseCases/` — a classe que executa a operação, recebendo um `Command` ou uma `Query` como parâmetro tipado
 
 O benefício é tornar a **intenção explícita no contrato**: ao receber um `Command`, sabe-se que haverá efeito colateral; ao receber uma `Query`, sabe-se que é apenas leitura. Não há mediator (ex: MediatR), o roteamento é feito diretamente via injeção de dependência.
+
+### 2.4. Histórico de movimentações de estoque (DynamoDB)
+
+Cada movimentação de estoque de um insumo também vai para uma tabela do Amazon DynamoDB, complementar ao PostgreSQL ([ADR-027](./docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)). O saldo continua só no PostgreSQL (`insumos.quantidade_disponivel`), e é ele que vale para a validação da OS e para o débito ([ADR-012](./docs/adr/ADR-012-Controle-de-Estoque-de-Insumos.md)); o histórico mostra de onde o saldo veio.
+
+| Rota | Resposta | Regras |
+|---|---|---|
+| `GET /api/insumos/{id}/movimentacoes` | 200 com a lista em ordem cronológica (vazia se não houver registros) | Com JWT; na AWS, `/management/api/insumos/{id}/movimentacoes`. Não consulta o PostgreSQL: um insumo desconhecido ou excluído também responde 200 (o excluído mantém o histórico até os itens expirarem, em 180 dias). Falha no DynamoDB: 500 |
+
+- **O que entra**, sempre depois de gravar no PostgreSQL: `Cadastro` (`POST /api/insumos`, de 0 ao saldo inicial), `Ajuste` (`PUT /api/insumos`, só quando o saldo muda) e `DebitoOrdemServico` (o débito automático do `PagamentoAprovado`: um item por insumo debitado, com o id da OS, depois do commit da transação do débito).
+- **Cada item** tem `ocorridoEm`, `tipo`, `origem` (`acao`, pela rota, ou `evento`, pela fila SQS), `quantidade` (a variação do saldo, com sinal), `saldoAnterior`, `saldoNovo` e `ordemServicoId` (só no débito).
+- **O que não entra**, porque nenhum saldo mudou: o `PUT` que não muda o saldo, o `PagamentoAprovado` ignorado (OS desconhecida ou estoque já debitado) e o débito que falhou (`os.falha`, etapa `estoque_debito`). A exclusão do insumo também não entra.
+- A gravação é *best-effort*: uma falha no DynamoDB gera só `integracao.falha` (Warning), a rota responde normalmente e o evento é processado. Não há dados pessoais, só os ids do insumo e da OS e as quantidades.
 
 ## 3. Referências Bibliográficas
 
@@ -286,6 +302,7 @@ Passo 2 - ajuste as variáveis conforme necessário, principalmente:
 - `DATABASE_CONNECTION_STRING`
 - `RESEND_API_KEY` (opcional)
 - `ELASTICMQ_PORT`, `SQS_FILA_CONSUMO`, `SQS_FILA_PUBLICACAO_OS_SERVICE`, `SQS_FILA_PUBLICACAO_BILLING`, `SQS_FILA_PUBLICACAO_EXECUTION` e `SQS_SERVICE_URL` (filas do SQS local; os padrões já funcionam)
+- `DYNAMODB_PORT` (porta do DynamoDB Local no host, `8003` por padrão; a `8000`, a `8001` e a `8002` são do Billing, do Execução e Produção e do OS Service)
 
 > O `.env.example` traz `REGISTRY_PREFIX` apontando para o ECR. Localmente, isso só muda o nome da imagem gerada. Se preferir um nome curto, deixe a variável vazia.
 
@@ -297,25 +314,25 @@ Se estiver usando o podman, use `podman compose up -d --build`
 
 E pronto!
 
-O banco de dados `postgres`, o `elasticmq` (o SQS local, com as oito filas FIFO do `elasticmq.conf`: a de cada um dos quatro serviços e a DLQ dela) e a `management-api` estarão disponíveis.
+O banco de dados `postgres`, o `elasticmq` (o SQS local, com as oito filas FIFO do `elasticmq.conf`: a de cada um dos quatro serviços e a DLQ dela), o `dynamodb-local` (container `oficina-dynamodb`, em memória, na porta `8003`; a API cria a tabela do histórico de movimentações de estoque ao subir) e a `management-api` estarão disponíveis.
 
 Passo 2 - Use `http://localhost:7194/index.html` para acessar o swagger.
 
 ### 4.3. Alternativa B - Local com dotnet cli
 
-Passo 1 - rode o `postgres` e o `elasticmq` via container: `docker compose up -d postgres elasticmq`. O Postgres também pode ser uma instância local.
+Passo 1 - rode o `postgres`, o `elasticmq` e o `dynamodb-local` via container: `docker compose up -d postgres elasticmq dynamodb-local`. O Postgres também pode ser uma instância local.
 
 Passo 2 - aponte o console para a pasta `server/1 - Frameworks & Drivers/TechChallenge.Oficina.Management.API/` e então execute `dotnet run`
 
 Pronto!
 
-A API sobe em `http://localhost:7194`, conforme o perfil `http` do `launchSettings.json`. Esse perfil usa o ambiente `Development`, cujo `appsettings.Development.json` aponta o SQS para o ElasticMQ (`http://localhost:9324`), e define credenciais AWS fictícias (`local`), que o ElasticMQ aceita.
+A API sobe em `http://localhost:7194`, conforme o perfil `http` do `launchSettings.json`. Esse perfil usa o ambiente `Development`, cujo `appsettings.Development.json` aponta o SQS para o ElasticMQ (`http://localhost:9324`) e o DynamoDB para o DynamoDB Local (`http://localhost:8003`), e define credenciais AWS fictícias (`local`), que os dois aceitam.
 
 Passo 3 - Use `http://localhost:7194/index.html` para acessar o Swagger.
 
 ### 4.4. Alternativa C - Local com Visual Studio 2026 ou VS Code
 
-Passo 1 - rode o `postgres` e o `elasticmq` via container: `docker compose up -d postgres elasticmq`.
+Passo 1 - rode o `postgres`, o `elasticmq` e o `dynamodb-local` via container: `docker compose up -d postgres elasticmq dynamodb-local`.
 
 Passo 2 - abra o arquivo `.slnx` em `/server`
 
@@ -335,7 +352,7 @@ Sozinha, a Management atende os cadastros normalmente, mas as OS chegam por even
    - `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-os-service-api` e, com o mesmo nome de rede, `oficina-billing-api` e `oficina-execution-api` (no Docker, `docker network connect ...` com os mesmos argumentos).
    - O nome da rede vem do nome da pasta deste repositório (o nome do projeto do compose, em minúsculas) mais `_default`. Se a pasta tiver outro nome, confira com `podman network ls`.
 
-A Management fica em `http://localhost:7194`, o OS Service em `http://localhost:7195`, o Billing em `http://localhost:7196` e o Execução e Produção em `http://localhost:7197`. Para testar, use a pasta **Saga** da collection do Postman do repo OS-SERVICE.
+A Management fica em `http://localhost:7194`, o OS Service em `http://localhost:7195`, o Billing em `http://localhost:7196` e o Execução e Produção em `http://localhost:7197`. Para testar, use a pasta **Saga** da collection do Postman do repo OS-SERVICE. O DynamoDB Local não é compartilhado: cada serviço usa o do próprio repositório (o da Management é o `oficina-dynamodb`, na `8003`).
 
 
 ### 4.5. Banco de dados
@@ -352,7 +369,7 @@ Na AWS, o banco é o Amazon RDS criado pelo Terraform de [DB/](./DB/README.md).
 
 ### 4.6. Rodando os testes
 
-Os testes automatizados estão organizados em `server/Tests/` por camada da arquitetura. Eles usam banco em memória e mocks (inclusive do SQS), sem precisar de Postgres, ElasticMQ ou Docker.
+Os testes automatizados estão organizados em `server/Tests/` por camada da arquitetura (inclusive o `TechChallenge.Oficina.NoSql.Tests`). Eles usam banco em memória e mocks (inclusive do SQS e do SDK do DynamoDB), e os de integração usam um histórico de movimentações em memória, sem precisar de Postgres, ElasticMQ, DynamoDB ou Docker.
 
 Para executar todos os testes da solução, use:
 
@@ -380,6 +397,12 @@ O consumidor não alcança o ElasticMQ (container parado ou URL errada). Suba o 
 6. O Billing não gera o orçamento (404 ou "ainda nao foi validada pela Management")
 O Billing ainda não recebeu o `OrdemServicoValidada` da Management: o OS Service ou o Billing não está usando o mesmo ElasticMQ (seção 4.4.1), a OS foi rejeitada por um cadastro inexistente, ou o evento ainda está a caminho. Aguarde alguns segundos e tente de novo.
 
+7. Porta 8003 em uso
+Altere `DYNAMODB_PORT` no `.env`. Na execução com `dotnet run`, ajuste também `DynamoDbSettings:ServiceUrl` no `appsettings.Development.json`.
+
+8. Logs `integracao.falha` com `Integracao` = `dynamodb`, ou uma movimentação faltando no histórico
+Os cadastros e o débito de estoque seguem normalmente; só o histórico fica sem aquele registro (`Warning`, `Operacao` = `registro_historico`). Se a consulta (`/movimentacoes`) responde 500, a falha é na leitura (`consulta_historico`). Localmente, confira se o `dynamodb-local` está no ar (com `dotnet run`, seções 4.3 e 4.4). Na AWS, confira se a tabela existe (`DB/infra`) e se a política `dynamodb-historico-estoque` está no usuário IAM `techchallenge-oficina-management-sqs` (ela vem do `SQS/infra`, junto do usuário). O `PUT` que não muda o saldo e a exclusão do insumo nunca aparecem no histórico (seção 2.4).
+
 ## 5. Requisitos Implementados
 
 Abaixo, você encontra uma tabela com o resumo dos requisitos implementados: os de negócio e os de observabilidade (R1 a R7). Na fase 4, os requisitos do ciclo de vida da OS (abertura, consulta de status, listagem, mudanças de status e indicadores) passaram para o OS Service: as evidências estão nos [requisitos atendidos do repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos). Os do orçamento e do pagamento passaram para o Billing, com as evidências no [README do repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), e os da fila de produção (diagnóstico e execução), para o Execução e Produção, com as evidências no [README do repo EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658). As rotas da Management ficam na raiz da API e, na AWS, ganham o prefixo `/management` do API Gateway; as do OS Service ganham o prefixo `/os`, as do Billing, `/billing`, e as do Execução e Produção, `/execution`.
@@ -395,35 +418,36 @@ Abaixo, você encontra uma tabela com o resumo dos requisitos implementados: os 
 | Fila de execução, diagnóstico e reparo (Execução e Produção) | Sim, no Execução e Produção | Fila de produção da oficina. Iniciar o diagnóstico publica `DiagnosticoIniciado` (OS `EmDiagnostico`), e finalizar a execução publica `ExecucaoFinalizada` (OS `Finalizada`): quem muda o status é o OS Service, ao consumir os eventos. O início da execução fica só no Execução e Produção (data e log, sem evento). | `GET /execution/api/execucoes/fila`, `GET /execution/api/execucoes/{osId}` e `POST /execution/api/execucoes/{osId}/iniciar-diagnostico`, `/iniciar` e `/finalizar` | [Repo EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) · [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) |
 | Atualização de status da OS com notificação ao cliente | Sim | O status muda só no OS Service: a entrega pela rota, e as demais mudanças pelos eventos do Execução e Produção (`DiagnosticoIniciado` e `ExecucaoFinalizada`) e do Billing. A cada mudança, o OS Service publica `OrdemServicoStatusAlterado`; a Management consome o evento e avisa o cliente por e-mail (desligado por padrão, seção 4.7). | `POST /os/api/ordens-servico/{id}/entregar` e, por evento, `POST /execution/api/execucoes/{osId}/iniciar-diagnostico` e `/finalizar` | [Consumo do evento](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [Sender Status](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Email/Features/OrdensServico/OrdemServicoStatusEmailSender.cs) · [Repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658#4-requisitos-atendidos) |
 | Comunicação entre os serviços (saga) | Sim | Eventos em filas Amazon SQS FIFO, saga coreografada com compensação, *fan-out* feito por quem publica, DLQ e consumidores idempotentes. | Filas `techchallenge-oficina-management.fifo`, `techchallenge-oficina-os-service.fifo`, `techchallenge-oficina-billing.fifo` e `techchallenge-oficina-execution.fifo` | [ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md) · [Messaging](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Messaging/) · [EventosController](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Controllers/Features/Eventos/EventosController.cs) · [SQS/README.md](./SQS/README.md) |
+| Histórico de movimentações de estoque em NoSQL | Sim | Amazon DynamoDB, complementar ao PostgreSQL (o saldo da tabela `insumos` continua sendo a fonte da verdade): o cadastro e o ajuste do insumo, pela rota, e o débito do `PagamentoAprovado`, por evento, registram cada movimentação em *best-effort*, com o saldo antes e depois, e os itens expiram em 180 dias | `GET /management/api/insumos/{id}/movimentacoes` | [ADR-027](./docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md) · [Projeto NoSql](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.NoSql/) · [HistoricoEstoqueGateway](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.NoSql/Features/Insumos/HistoricoEstoqueGateway.cs) · [Casos de uso dos insumos](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/Insumos/UseCases/InsumoUseCases.cs) · [Débito de estoque](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [dynamodb.tf](./DB/infra/dynamodb.tf) · [Política IAM](./SQS/infra/iam.tf) |
 | R1 — Latência da API | Sim | APM com o tracer .NET injetado pelo Datadog Agent no cluster, sem mudança no código ou no Dockerfile. Latência p95 por serviço no monitor e no dashboard; por rota, na página do serviço no APM. | `service` = `management-api`, `os-service-api`, `billing-api` e `execution-api` | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
 | R2 — Consumo de recursos do Kubernetes na AWS | Sim | Datadog Agent (DaemonSet + Cluster Agent) instalado pelo `kubernetes/infra/addons`. Monitores de CPU e memória em relação ao limit, restarts, CrashLoopBackOff e nós, mais widgets. Os monitores por deployment cobrem o namespace `oficina` (limitação registrada na ADR-014). | Cluster EKS | [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
 | R3 — Healthchecks e uptime | Sim | `/health/ready` verifica o banco e é consultado pelo `http_check` do Datadog Agent; o `/health` não muda. Uptime externo por Synthetics em `GET /management/health`, `GET /os/health`, `GET /billing/health` e `GET /execution/health` pelo API Gateway, com SLO. | `/health` e `/health/ready` | [Program.cs](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Program.cs) · [Health check do banco](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.DB/Extensions.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 6) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
-| R4 — Falhas no processamento de OS | Sim | Eventos de log `os.falha` por etapa (regra de negócio, nos quatro serviços), `integracao.falha` (Resend, Mercado Pago e SQS) e `http.erro_nao_tratado` (500, identificando banco indisponível), mais 5xx por rota no APM. Viram métricas, monitores e widgets. Na Management, saem da validação da OS e do débito de estoque; os do orçamento e do pagamento saem do Billing, e os do diagnóstico e da execução, do Execução e Produção. | Fluxo de OS, orçamento, pagamento e execução | [docs/observabilidade.md](./docs/observabilidade.md) (seções 3 e 5) · [Eventos](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs) · [Validação e débito de estoque](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [Middleware](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Middleware/GlobalExceptionHandlerMiddleware.cs) · [Observabilidade do Billing](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/observabilidade.md) · [Observabilidade do Execução e Produção](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/observabilidade.md) |
+| R4 — Falhas no processamento de OS | Sim | Eventos de log `os.falha` por etapa (regra de negócio, nos quatro serviços), `integracao.falha` (Resend, Mercado Pago, SQS e DynamoDB) e `http.erro_nao_tratado` (500, identificando banco indisponível), mais 5xx por rota no APM. Viram métricas, monitores e widgets. Na Management, saem da validação da OS e do débito de estoque; os do orçamento e do pagamento saem do Billing, e os do diagnóstico e da execução, do Execução e Produção. | Fluxo de OS, orçamento, pagamento e execução | [docs/observabilidade.md](./docs/observabilidade.md) (seções 3 e 5) · [Eventos](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs) · [Validação e débito de estoque](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/UseCases/OrdemServicoReferenciaUseCases.cs) · [Middleware](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Middleware/GlobalExceptionHandlerMiddleware.cs) · [Observabilidade do Billing](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/observabilidade.md) · [Observabilidade do Execução e Produção](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/observabilidade.md) |
 | R5 — Logs estruturados (JSON) | Sim | Serilog com 1 JSON por linha no stdout e chaves que o Datadog reconhece sem configuração (`timestamp`, `level`, `message`, `evento`, `dd.*` e `error.*`). | As quatro APIs | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [docs/observabilidade.md](./docs/observabilidade.md) (seção 2) |
 | R6 — Correlação entre logs e traces | Sim | Dentro de cada API: o tracer injeta `dd.trace_id` e `dd.span_id` em cada log, que abre o trace no APM. Entre os serviços, os logs `evento.*` levam o `OrdemServicoId` e o id do evento. API Gateway e Lambdas não são rastreados (limitação registrada na ADR-014). | As quatro APIs | [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Management.API/Extensions/LoggingExtension.cs) · [ADR-014](./docs/adr/ADR-014-Observabilidade-com-Datadog.md) |
 | R7 — Dashboard | Sim | 1 dashboard: OS criadas e encerradas por dia, tempo médio por status, falhas (de negócio por etapa e 5xx por rota), erros de integração e seções técnicas de R1 a R3. Os widgets de negócio só recebem dados durante o trial de 14 dias do Datadog. | Datadog | [docs/observabilidade.md](./docs/observabilidade.md) (seção 5) · [kubernetes/infra/DATADOG.md](./kubernetes/infra/DATADOG.md) |
 
 ## 6. Infraestrutura
 
-A infraestrutura fica em três pastas deste monorepo. O OS Service, o Billing e o Execução e Produção têm o próprio banco e os próprios manifests, nos repositórios OS-SERVICE, BILLING e EXECUTION, e as Lambdas de autenticação ficam no repositório LAMBDA.
+A infraestrutura fica em três pastas deste monorepo. O OS Service, o Billing e o Execução e Produção têm o próprio banco (RDS e tabela DynamoDB) e os próprios manifests, nos repositórios OS-SERVICE, BILLING e EXECUTION, e as Lambdas de autenticação ficam no repositório LAMBDA.
 
 | Parte | Onde | Responsabilidade |
 |---|---|---|
 | Aplicação | [server/](./server/) | Código .NET, testes e imagem Docker, publicada no Amazon ECR |
-| Cluster e borda | [kubernetes/](./kubernetes/README.md) | VPC, Amazon EKS, Amazon API Gateway (acesso externo às quatro APIs: `/management`, `/os`, `/billing` e `/execution`, mais a rota pública do webhook do Mercado Pago), VPC Link e NLB interno, addons (Metrics Server e Datadog Agent), recursos do Datadog (métricas de log, monitores, synthetics e dashboard) e manifests Kubernetes da Management API. O pipeline gera o Secret com a connection string do RDS, a chave do Resend e a chave do SQS |
-| Banco | [DB/](./DB/README.md) | Amazon RDS PostgreSQL. O schema é criado pelas migrations da API, no startup (ADR-009) |
-| Filas | [SQS/](./SQS/README.md) | Quatro filas Amazon SQS FIFO (uma de entrada por serviço), com DLQ, um usuário IAM por serviço e as chaves de acesso no SSM Parameter Store |
+| Cluster e borda | [kubernetes/](./kubernetes/README.md) | VPC, Amazon EKS, Amazon API Gateway (acesso externo às quatro APIs: `/management`, `/os`, `/billing` e `/execution`, mais a rota pública do webhook do Mercado Pago), VPC Link e NLB interno, addons (Metrics Server e Datadog Agent), recursos do Datadog (métricas de log, monitores, synthetics e dashboard) e manifests Kubernetes da Management API. O pipeline gera o Secret com a connection string do RDS, a chave do Resend e a chave do usuário IAM da Management (SQS e DynamoDB) |
+| Banco | [DB/](./DB/README.md) | Amazon RDS PostgreSQL e a tabela DynamoDB do histórico de movimentações de estoque (`techchallenge-oficina-management-estoque-historico`, ADR-027). O schema do PostgreSQL é criado pelas migrations da API, no startup (ADR-009) |
+| Filas | [SQS/](./SQS/README.md) | Quatro filas Amazon SQS FIFO (uma de entrada por serviço), com DLQ, um usuário IAM por serviço e as chaves de acesso no SSM Parameter Store. O usuário da Management também recebe aqui a política da tabela DynamoDB dela (`dynamodb-historico-estoque`) |
 | OS Service | [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) (outro repositório) | Código do OS Service, o RDS dele (`techchallenge-oficina-os-postgres`), a tabela DynamoDB do histórico da saga (`techchallenge-oficina-os-saga-historico`, com a policy dela no usuário IAM do OS Service criado aqui) e os manifests no namespace `os-service`. Usa a VPC, o EKS, a rota `/os` do API Gateway, o NLB (NodePort 30081) e as filas criados aqui |
 | Billing | [BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658) (outro repositório) | Código do Billing, o RDS dele (`techchallenge-oficina-billing-postgres`), a tabela DynamoDB do histórico de pagamentos (`techchallenge-oficina-billing-pagamentos-historico`, com a policy dela no usuário IAM do Billing criado aqui) e os manifests no namespace `billing`. Usa a VPC, o EKS, as rotas `/billing` e do webhook no API Gateway, o NLB (NodePort 30082) e as filas criados aqui |
 | Execução e Produção | [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) (outro repositório) | Código do Execução e Produção, o RDS dele (`techchallenge-oficina-execution-postgres`), a tabela DynamoDB da linha do tempo da produção (`techchallenge-oficina-execution-producao-historico`, com a policy dela no usuário IAM do Execução e Produção criado aqui) e os manifests no namespace `execution`. Usa a VPC, o EKS, a rota `/execution` do API Gateway, o NLB (NodePort 30083) e as filas criados aqui |
 | Autenticação | [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658) (outro repositório) | Lambda authorizer do API Gateway (JWT do Auth0 com a claim `cpf`) e Lambda `POST /auth/token`, que gera o JWT com o CPF do cliente |
 
 **Ordem para subir:**
-1. **Bootstrap** deste repositório, que roda tudo na sequência: testes → foundation → addons → RDS → imagem no ECR → manifests. As filas SQS sobem em paralelo, logo depois dos testes, e antes dos manifests.
+1. **Bootstrap** deste repositório, que roda tudo na sequência: testes → foundation → addons → RDS e tabela DynamoDB → imagem no ECR → manifests. As filas SQS (com os usuários IAM e a política da tabela DynamoDB da Management) sobem em paralelo, logo depois dos testes, e antes dos manifests.
 2. **Bootstrap do repo OS-SERVICE e, depois dele, o do EXECUTION**: o OS Service precisa consumir os eventos novos (`DiagnosticoIniciado` e `ExecucaoFinalizada`) antes de o Execução e Produção publicá-los. O **Bootstrap do BILLING** pode rodar a qualquer momento depois do deste repositório. Os três usam a VPC, o EKS, as rotas `/os`, `/billing` e `/execution` e as filas criados aqui.
 3. **Deploy do repo LAMBDA**, que usa a VPC e o RDS criados aqui.
 
-**Ordem para derrubar:** primeiro o **Destroy dos repos LAMBDA, OS-SERVICE, BILLING e EXECUTION**, em qualquer ordem, depois o **Destroy deste repositório**, que remove o SQS (em paralelo) e RDS → addons → foundation. O Destroy deste repositório falha se o SG da Lambda ou o RDS do OS Service, do Billing ou do Execução e Produção (ou o SG de um deles) ainda existirem.
+**Ordem para derrubar:** primeiro o **Destroy dos repos LAMBDA, OS-SERVICE, BILLING e EXECUTION**, em qualquer ordem, depois o **Destroy deste repositório**, que remove o SQS (em paralelo) e RDS e tabela DynamoDB → addons → foundation. O Destroy deste repositório falha se o SG da Lambda ou o RDS do OS Service, do Billing ou do Execução e Produção (ou o SG de um deles) ainda existirem.
 
 O ECR é criado manualmente e fica fora de qualquer `destroy` (6.2).
 
@@ -432,8 +456,8 @@ flowchart LR
   subgraph Mono[Este monorepo]
     Code[server/\nCodigo + testes] --> Image[docker compose build\nmanagement-api]
     Infra[kubernetes/infra\nVPC, EKS, API Gateway, NLB, addons]
-    DBTF[DB/infra\nRDS]
-    SQSTF[SQS/infra\nfilas, usuarios IAM e SSM]
+    DBTF[DB/infra\nRDS e tabela DynamoDB]
+    SQSTF[SQS/infra\nfilas, usuarios IAM, SSM\ne politica do DynamoDB]
     Manifests[kubernetes/k8s\nmanifests]
   end
 
@@ -443,6 +467,8 @@ flowchart LR
   EKS -->|pull| ECR
   EKS -->|PostgreSQL 5432| RDS[Amazon RDS]
   DBTF --> RDS
+  DBTF --> DDB[(Amazon DynamoDB\nmovimentacoes de estoque)]
+  EKS -->|historico de estoque| DDB
   SQSTF --> SQS[Amazon SQS\nfilas FIFO]
   EKS -->|publica e consome eventos| SQS
   LAMBDA[Repo LAMBDA\nauthorizer e /auth/token] -.->|usa a VPC e o RDS| RDS
@@ -459,11 +485,11 @@ flowchart LR
 | Porta e health | A API escuta em `8080` e expõe `/health` sem autenticação. Ele é usado pelas probes do Kubernetes, pelo health check do NLB do API Gateway e pelos synthetics do Datadog |
 | Health com banco | A API expõe `/health/ready` sem autenticação: verifica o banco e responde `Healthy` (200) ou `Unhealthy` (503). É consultado só pelo `http_check` do Datadog Agent. O `readinessProbe` e o NLB continuam em `/health`, que não depende do banco |
 | Rotas | As rotas ficam na raiz (`/api/...` e `/health`), sem `PathBase`. O API Gateway recebe `/management/...` e remove o prefixo antes de encaminhar. `/os/...` vai para o OS Service (repo OS-SERVICE), `/billing/...` vai para o Billing (repo BILLING), `/execution/...` vai para o Execução e Produção (repo EXECUTION), e `POST /auth/token`, para a Lambda do repo LAMBDA |
-| Configuração | Na AWS, `DatabaseSettings__ConnectionString`, `ResendSettings__ApiKey`, `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` (chave do usuário IAM da Management no SQS, lida do SSM) vêm do Secret `oficina-api-secrets`, gerado pelo pipeline (`_k8s-apply.yml`). O ConfigMap `management-api-config` define `ASPNETCORE_*`, `AllowedHosts`, o nível de log, as filas (`SqsSettings__FilaConsumo` e a lista `SqsSettings__FilasPublicacao__0` a `__2`) e o `AWS_REGION`. Ele sobrescreve a seção `Serilog` do `appsettings.json` com `Serilog__MinimumLevel__Default` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore`. `AuthSettings` e o restante de `ResendSettings` (`FromEmail`, `SendEmailOnStatusChange`) vêm do `appsettings.json` da imagem |
+| Configuração | Na AWS, `DatabaseSettings__ConnectionString`, `ResendSettings__ApiKey`, `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` (chave do usuário IAM da Management, que serve ao SQS e à tabela DynamoDB, lida do SSM) vêm do Secret `oficina-api-secrets`, gerado pelo pipeline (`_k8s-apply.yml`). O ConfigMap `management-api-config` define `ASPNETCORE_*`, `AllowedHosts`, o nível de log, as filas (`SqsSettings__FilaConsumo` e a lista `SqsSettings__FilasPublicacao__0` a `__2`), a tabela do histórico de movimentações de estoque (`DynamoDbSettings__TabelaHistoricoEstoque`) e o `AWS_REGION`. Ele sobrescreve a seção `Serilog` do `appsettings.json` com `Serilog__MinimumLevel__Default` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore`. `AuthSettings` e o restante de `ResendSettings` (`FromEmail`, `SendEmailOnStatusChange`) vêm do `appsettings.json` da imagem |
 | Eventos | A API consome a fila `techchallenge-oficina-management.fifo` e publica o mesmo envelope na `techchallenge-oficina-os-service.fifo`, na `techchallenge-oficina-billing.fifo` e na `techchallenge-oficina-execution.fifo` (*fan-out* no publicador), com os eventos da [ADR-020](./docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md). Cada serviço consome a própria fila e publica nas filas dos serviços que consomem algum evento dele: o OS Service, nas da Management, do Billing e do Execução e Produção; o Billing, nas do OS Service e da Management; o Execução e Produção, só na do OS Service. As filas são criadas por [SQS/](./SQS/README.md) |
 | Logs | JSON no stdout, 1 por linha (Serilog), com `timestamp`, `level`, `message`, `evento`, `logger.name`, `dd.*`, `error.*` e as propriedades dos eventos. O Datadog Agent coleta o stdout dos pods. As métricas de log, os monitores e o dashboard dependem dos nomes de eventos, propriedades e valores de [docs/observabilidade.md](./docs/observabilidade.md), que o OS Service, o Billing e o Execução e Produção também seguem |
 | Datadog | O Deployment tem as labels `tags.datadoghq.com/env: study` e `tags.datadoghq.com/service: management-api`, que definem as tags `env` e `service` de logs, traces e métricas. O Agent injeta o tracer .NET nos pods dos namespaces `oficina`, `os-service` (OS Service, `os-service-api`), `billing` (Billing, `billing-api`) e `execution` (Execução e Produção, `execution-api`) |
-| Banco | As migrations do EF Core rodam no startup da API. Com um RDS novo (vazio), as tabelas são criadas quando a API sobe. A Lambda `buscar-cliente` do repo LAMBDA lê a tabela `clientes`. O OS Service, o Billing e o Execução e Produção não acessam este banco |
+| Banco | As migrations do EF Core rodam no startup da API. Com um RDS novo (vazio), as tabelas são criadas quando a API sobe. A Lambda `buscar-cliente` do repo LAMBDA lê a tabela `clientes`. O OS Service, o Billing e o Execução e Produção não acessam este banco. A tabela DynamoDB do histórico de movimentações de estoque é criada pelo Terraform (`DB/infra`): na AWS, a API só grava e consulta (`PutItem` e `Query`) |
 
 ### 6.2 ECR (manual)
 
@@ -487,11 +513,11 @@ Localmente, o `docker compose` mostra o mesmo JSON, só sem o objeto `dd`, porqu
 
 O CI/CD usa GitHub Actions, com pipelines únicos para a aplicação, o banco, as filas e o cluster. Os detalhes estão em [.github/workflows/README.md](./.github/workflows/README.md).
 
-- **Bootstrap** (manual): testes → foundation → addons → RDS → build e push da imagem → `kubectl apply` com restart. As filas SQS (`SQS/infra`) sobem em paralelo, logo depois dos testes, e antes do `kubectl apply`. Use na primeira criação, para recriar o ambiente depois do Destroy e para reaplicar a HEAD da `main`. Depois, rode os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
+- **Bootstrap** (manual): testes → foundation → addons → RDS e tabela DynamoDB (`DB/infra`) → build e push da imagem → `kubectl apply` com restart. As filas SQS (`SQS/infra`, com os usuários IAM e a política da tabela DynamoDB da Management) sobem em paralelo, logo depois dos testes, e antes do `kubectl apply`. Use na primeira criação, para recriar o ambiente depois do Destroy e para reaplicar a HEAD da `main`. Depois, rode os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
 - **Deploy**:
   - **Pull Request para a `main`:** build e testes, validação offline do Terraform (foundation, addons, DB e SQS) e do Kustomize. Também roda os `plan` informativos.
-  - **Push na `main`:** aplica só o que mudou, na ordem: foundation → addons → RDS → imagem → manifests. O SQS é aplicado em paralelo, antes dos manifests. O passo dos manifests reinicia a API.
-- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): confere que as Lambdas e os RDS do OS Service, do Billing e do Execução e Produção já foram destruídos e remove o SQS (em paralelo) e RDS → addons → foundation.
+  - **Push na `main`:** aplica só o que mudou, na ordem: foundation → addons → RDS e tabela DynamoDB → imagem → manifests. O SQS é aplicado em paralelo, antes dos manifests. O passo dos manifests reinicia a API.
+- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): confere que as Lambdas e os RDS do OS Service, do Billing e do Execução e Produção já foram destruídos e remove o SQS (em paralelo) e RDS e tabela DynamoDB → addons → foundation.
 - **K8s Apply** (manual): reaplica os manifests e reinicia a API. Use, por exemplo, depois de trocar `RESEND_API_KEY`.
 - **Trocar `RDS_PASSWORD`:** rode o Bootstrap, que aplica a senha nova no RDS e recria o Secret da API. Depois rode o Deploy do repo LAMBDA.
 
@@ -519,9 +545,9 @@ Apply, destroy e o push da imagem só rodam a partir da `main`: disparados em ou
 Antes de subir o ambiente:
 - crie o ECR (6.2);
 - configure os secrets, as variables e o environment `destroy`;
-- libere ao usuário IAM `terraform` as novas chaves de state (`techchallenge-oficina/fase-4/*` no bucket `terraform-state-soat16`) e as permissões de SQS, IAM e SSM usadas pelo `SQS/infra` ([SQS/README.md](./SQS/README.md)).
+- libere ao usuário IAM `terraform` as novas chaves de state (`techchallenge-oficina/fase-4/*` no bucket `terraform-state-soat16`), as permissões de DynamoDB usadas pelo `DB/infra` ([DB/README.md](./DB/README.md)) e as de SQS, IAM (inclusive `iam:PutUserPolicy`, `iam:GetUserPolicy` e `iam:DeleteUserPolicy`, da política do DynamoDB) e SSM usadas pelo `SQS/infra` ([SQS/README.md](./SQS/README.md)). Hoje ele é administrador.
 
-Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md). Não há secret do GitHub para o SQS: as chaves vêm do SSM.
+Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md). Não há secret do GitHub para o SQS nem para o DynamoDB: a chave vem do SSM, e a tabela, do `DB/infra`.
 
 **Desative também os workflows dos repositórios APP, DB e K8S da fase 3.** Eles usam os mesmos nomes de recursos na AWS e publicam no mesmo ECR. O ambiente da fase 3 precisa estar destruído antes do primeiro Bootstrap deste repositório.
 
@@ -530,7 +556,7 @@ Tudo isso está em [.github/workflows/README.md](./.github/workflows/README.md).
 Nessa seção, você encontra observações gerais.
 
 - Para fazer requisições, use a Collection do Postman na pasta `/e2e` (`TechChallenge.Oficina.Management.API.postman_collection.json`)
-  - ela cobre os cadastros (clientes, veículos, insumos e serviços). As ordens de serviço e a saga entre os serviços (com o orçamento e o pagamento no Billing e o diagnóstico e a execução no Execução e Produção) estão na collection do [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), que chama as quatro APIs;
+  - ela cobre os cadastros (clientes, veículos, insumos e serviços). O último request da pasta Insumos ("14 - Movimentacoes do Insumo (200)") consulta o histórico de movimentações de estoque do insumo: o `Cadastro` (saldo inicial 10) e o `Ajuste` de 10 para 15. Como o insumo foi excluído no request 12, ele também mostra que o histórico continua depois da exclusão (seção 2.4). As ordens de serviço e a saga entre os serviços (com o orçamento e o pagamento no Billing e o diagnóstico e a execução no Execução e Produção) estão na collection do [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), que chama as quatro APIs;
   - importe a collection no Postman
   - Em `variables`, altere para apontar a URL para onde está rodando o projeto.
   - Na AWS:

@@ -8,6 +8,8 @@ namespace TechChallenge.Oficina.Controllers.Features.Insumos
 
         object Adapt(InsumoResult<IReadOnlyCollection<InsumoViewModel>, Exception> result);
 
+        object Adapt(InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception> result);
+
         object Adapt(InsumoResult<bool, Exception> result);
 
         object Empty();

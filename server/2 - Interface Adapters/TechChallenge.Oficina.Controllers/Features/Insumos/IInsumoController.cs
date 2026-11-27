@@ -10,6 +10,8 @@ namespace TechChallenge.Oficina.Controllers.Features.Insumos
 
         Task<object> Get(CancellationToken cancellationToken);
 
+        Task<object> GetMovimentacoes(Guid id, CancellationToken cancellationToken);
+
         Task<object> Put(AtualizarInsumoCommand command, CancellationToken cancellationToken);
 
         Task<object> Delete(Guid id, CancellationToken cancellationToken);

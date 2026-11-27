@@ -1,16 +1,18 @@
 name: Destroy
-# Destrutivo: exige confirmação por input e aprovação no Environment "destroy". Os dados do RDS são perdidos.
+# Destrutivo: exige confirmação por input e aprovação no Environment "destroy". Os dados do RDS e o histórico de
+# movimentações de estoque na tabela DynamoDB são perdidos.
 # Antes, rode o Destroy do repo LAMBDA (a Lambda buscar-cliente fica nas subnets privadas e tem uma regra no SG do RDS)
 # e os dos repos OS-SERVICE, BILLING e EXECUTION (o RDS de cada um fica nas subnets privadas e o SG dele referencia o SG
 # dos nodes). Os jobs *-check abaixo barram o Destroy enquanto algum deles estiver de pé.
 # Ordem entre os repos: LAMBDA, OS-SERVICE, BILLING e EXECUTION (em qualquer ordem) → este.
-# Ordem: RDS (DB/infra) → addons → foundation (EKS, API Gateway, NLB e VPC). O SQS (SQS/infra) sai em paralelo.
+# Ordem: RDS e tabela DynamoDB (DB/infra) → addons → foundation (EKS, API Gateway, NLB e VPC). O SQS (SQS/infra,
+# com a política DynamoDB da Management) sai em paralelo.
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Digite "destroy" para confirmar a remoção do RDS, do EKS, dos addons, dos recursos do Datadog, das filas SQS e da VPC'
+        description: 'Digite "destroy" para confirmar a remoção do RDS, da tabela DynamoDB, do EKS, dos addons, dos recursos do Datadog, das filas SQS e da VPC'
         required: true
         type: string
 
@@ -115,7 +117,8 @@ jobs:
     steps:
       - run: echo "Destroy aprovado"
 
-  # Filas SQS, usuários IAM e chaves no SSM: não dependem da VPC nem do EKS
+  # Filas SQS, usuários IAM (com as políticas sqs e, na Management, dynamodb-historico-estoque) e chaves no SSM:
+  # não dependem da VPC nem do EKS
   terraform-destroy-sqs:
     needs: gate
     uses: ./.github/workflows/_terraform.yml
@@ -124,7 +127,8 @@ jobs:
       command: destroy
     secrets: inherit
 
-  # O RDS sai primeiro: ele usa as subnets privadas e o SG dos nodes, e o DB/infra lê a VPC pelo cluster EKS
+  # O RDS sai primeiro: ele usa as subnets privadas e o SG dos nodes, e o DB/infra lê a VPC pelo cluster EKS.
+  # A tabela DynamoDB do histórico de estoque sai junto (o histórico é perdido)
   terraform-destroy-db:
     needs: gate
     uses: ./.github/workflows/_terraform.yml

@@ -4,8 +4,8 @@ As pipelines deste monorepo cuidam de tudo que ficava em três repositórios na 
 
 - **Aplicação** (`server/`): build e testes, além da imagem da Management API no ECR, que é criado manualmente.
 - **Cluster e borda** (`kubernetes/`): VPC, EKS, API Gateway (com as rotas `/management`, `/os`, `/billing` e `/execution` e o webhook do Mercado Pago), NLB, addons e manifests.
-- **Banco** (`DB/`): o RDS PostgreSQL da Management.
-- **Filas** (`SQS/`): as filas Amazon SQS FIFO entre a Management, o OS Service, o Billing e o Execução e Produção, os usuários IAM e as chaves no SSM Parameter Store.
+- **Banco** (`DB/`): o RDS PostgreSQL da Management e a tabela DynamoDB do histórico de movimentações de estoque ([ADR-027](../../docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)).
+- **Filas** (`SQS/`): as filas Amazon SQS FIFO entre a Management, o OS Service, o Billing e o Execução e Produção, os usuários IAM e as chaves no SSM Parameter Store, além da política IAM do usuário da Management na tabela DynamoDB do histórico de estoque (no mesmo state do usuário).
 
 A ordem entre as partes, que antes era manual entre repositórios, agora é feita com `needs` entre jobs.
 
@@ -32,7 +32,7 @@ A ordem entre as partes, que antes era manual entre repositórios, agora é feit
 ### `_build-test.yml`
 - `actions/checkout@v7` e `actions/setup-dotnet@v6` (10.0.x).
 - `dotnet restore`, `dotnet build -c Release` e `dotnet test -c Release` em `server/TechChallenge.Oficina.API.slnx`.
-- Os testes usam banco em memória e mocks (inclusive do SQS). Não precisam de AWS, banco nem Docker, então rodam também em PR de fork.
+- Os testes usam banco em memória e mocks (SQS e DynamoDB). Não precisam de AWS, banco nem Docker, então rodam também em PR de fork.
 
 ### `_build-push.yml`
 - Recebe o input `image-tag`. O Bootstrap e o Deploy passam sempre `latest`, a tag fixa dos manifests em `kubernetes/k8s/`.
@@ -61,6 +61,7 @@ A ordem entre as partes, que antes era manual entre repositórios, agora é feit
 
   O Terraform ignora `TF_VAR_` de variável que a pasta não declara. O `SQS/infra` não usa nenhum deles.
 - **Concorrência:** um grupo por pasta. Validate e plan cancelam o run anterior; apply e destroy esperam na fila.
+- **Histórico de estoque no DynamoDB:** a tabela `techchallenge-oficina-management-estoque-historico` fica no `DB/infra` (`dynamodb.tf`, no state do RDS), mas a política inline `dynamodb-historico-estoque` dela fica no `SQS/infra` (`iam.tf`), no mesmo state do usuário IAM `techchallenge-oficina-management-sqs`. Por isso nenhuma ordem entre jobs mudou: o `DB/infra` e o `SQS/infra` continuam em paralelo no Bootstrap, no Deploy e no Destroy, a política monta o ARN da tabela pelo nome (o IAM o aceita antes de a tabela existir) e, se o usuário for recriado, ela volta no mesmo apply.
 
 | Pasta | State (bucket `terraform-state-soat16`) |
 |---|---|
@@ -79,21 +80,23 @@ A ordem entre as partes, que antes era manual entre repositórios, agora é feit
   4. Roda `aws eks update-kubeconfig`.
   5. Descobre o endpoint do RDS pelo `RDS_INSTANCE_IDENTIFIER`.
   6. Gera `kubernetes/k8s/.env`, com a connection string e a chave do Resend.
-  7. Lê do SSM a chave do usuário IAM da Management no SQS (`/techchallenge-oficina/sqs/management/access-key-id` e `/secret-access-key`), mascara os valores no log e os acrescenta ao `.env` como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`. Se os parâmetros não existirem, falha pedindo o Bootstrap.
+  7. Lê do SSM a chave do usuário IAM da Management (`/techchallenge-oficina/sqs/management/access-key-id` e `/secret-access-key`, criados pelo `SQS/infra`), mascara os valores no log e os acrescenta ao `.env` como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`. A mesma chave serve às filas SQS e à tabela DynamoDB do histórico de estoque (no log, é o passo "Adicionar a chave do usuário IAM da Management (SQS e DynamoDB) ao kubernetes/k8s/.env"). Se os parâmetros não existirem, falha pedindo o Bootstrap.
   8. `kubectl apply -k kubernetes/k8s`.
   9. Se `restart-pods`, `kubectl rollout restart`.
-- O Secret `oficina-api-secrets` não tem hash no nome. Por isso, trocar a senha, a chave do Resend ou a chave do SQS só chega aos pods com restart.
+- O Secret `oficina-api-secrets` não tem hash no nome. Por isso, trocar a senha, a chave do Resend ou a chave do usuário IAM só chega aos pods com restart.
 
 ## 2. `bootstrap.yml`
 
 - **Gatilho:** `workflow_dispatch`, a partir da `main`.
 - **Jobs, nesta ordem:**
   1. `build-test`, para falhar antes de criar recursos pagos;
-  2. `terraform-foundation` e, em paralelo, `terraform-sqs` (as filas não dependem da VPC nem do EKS);
+  2. `terraform-foundation` e, em paralelo, `terraform-sqs` (filas, usuários IAM, chaves no SSM e a política DynamoDB da Management, que não dependem da VPC nem do EKS);
   3. `terraform-addons`, depois da foundation;
-  4. `terraform-db`;
+  4. `terraform-db` (RDS e tabela DynamoDB do histórico de estoque);
   5. `build-push`;
   6. `k8s-apply` (com restart), depois do `build-push` e do `terraform-sqs`.
+
+A tabela DynamoDB do histórico de estoque não mudou a ordem dos jobs: ela é criada no `terraform-db`, e a política dela, no `terraform-sqs`, no mesmo state do usuário IAM da Management (veja `_terraform.yml`).
 
 Use na primeira criação, para recriar o ambiente depois de um Destroy ou para reaplicar a HEAD da `main`. É também o jeito de aplicar uma troca das variables `DD_ENABLED` ou `DD_SYNTHETICS_STATUS`. Depois dele, rode os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
 
@@ -117,8 +120,8 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
   - **o primeiro push na `main`** marca todos os arquivos como alterados e aplica tudo. Se os secrets da AWS já estiverem configurados, ele cria o ambiente inteiro; sem eles, os jobs de apply falham na credencial e não criam nada;
   - um push em `kubernetes/infra/**` com o ambiente desligado recria o cluster do zero;
   - um push em `server/**` com o ambiente desligado publica a imagem, mas o `apply-k8s` falha porque não há cluster;
-  - um push em `SQS/infra/**` com o ambiente desligado recria as filas, os usuários e as chaves (sem custo relevante), e o `apply-k8s` falha porque não há cluster.
-- **Chave do SQS recriada:** o `apply-k8s` daqui atualiza só o Secret da Management. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION para os três serviços receberem a chave nova.
+  - um push em `SQS/infra/**` com o ambiente desligado recria as filas, os usuários, as chaves e a política DynamoDB da Management (sem custo relevante), e o `apply-k8s` falha porque não há cluster.
+- **Chave do SQS recriada:** o `apply-k8s` daqui atualiza só o Secret da Management. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION para os três serviços receberem a chave nova. Se o apply recriar os usuários IAM, a política DynamoDB da Management volta no mesmo apply; as dos outros três serviços, não (ficam no `DB/infra` de cada repo): rode os Bootstraps deles.
 - **Ambiente recriado por um push:** os repos OS-SERVICE, BILLING e EXECUTION usam o cluster, o API Gateway e as filas daqui. Depois, rode os Bootstraps deles, na ordem do começo deste README, e o Deploy do repo LAMBDA.
 - **Não use "Re-run" em um Deploy antigo:** ele reaplicaria a infra e publicaria `latest` de um commit antigo. Para reaplicar a HEAD, use o Bootstrap.
 - **Mudanças só no `deploy.yml`** não aplicam nada. Se precisar, rode o Bootstrap ou o K8s Apply.
@@ -135,8 +138,8 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
 | `billing-check` | `confirm` = `destroy` na `main` | **Falha** se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` (repo BILLING) ainda existirem, pelo mesmo motivo. Rode antes o Destroy do BILLING |
 | `execution-check` | `confirm` = `destroy` na `main` | **Falha** se o RDS `techchallenge-oficina-execution-postgres` ou o SG `techchallenge-oficina-execution-rds-sg` (repo EXECUTION) ainda existirem, pelo mesmo motivo. Rode antes o Destroy do EXECUTION |
 | `gate` | depois dos quatro checks (`lambda-check`, `os-service-check`, `billing-check` e `execution-check`) | `environment: destroy`: aprovação manual. É um job à parte porque um job com `uses:` não aceita `environment` |
-| `terraform-destroy-sqs` | depois do `gate` | Destroy do `SQS/infra`: filas, DLQs, usuários IAM e parâmetros do SSM. Roda em paralelo com o do DB |
-| `terraform-destroy-db` | depois do `gate` | Destroy do `DB/infra`. **Os dados do RDS são perdidos** |
+| `terraform-destroy-sqs` | depois do `gate` | Destroy do `SQS/infra`: filas, DLQs, usuários IAM (com as políticas `sqs` e, na Management, `dynamodb-historico-estoque`) e parâmetros do SSM. Roda em paralelo com o do DB |
+| `terraform-destroy-db` | depois do `gate` | Destroy do `DB/infra`: RDS e tabela DynamoDB. **Os dados do RDS e o histórico de movimentações de estoque são perdidos** |
 | `terraform-destroy-addons` | depois do DB | Destroy do `kubernetes/infra/addons`: Metrics Server, Datadog Agent e recursos do Datadog |
 | `terraform-destroy-foundation` | depois do DB e dos addons | Destroy do `kubernetes/infra/foundation`: EKS, API Gateway, VPC Link, NLB e VPC |
 
@@ -151,8 +154,9 @@ Use na primeira criação, para recriar o ambiente depois de um Destroy ou para 
 - **Quando usar:**
   - depois de trocar `RESEND_API_KEY`;
   - para reiniciar a API sem passar pelo Deploy.
-- Só atualiza a Management API. Os repos OS-SERVICE, BILLING e EXECUTION têm o próprio K8s Apply (por exemplo, para receberem a chave nova do SQS).
+- Só atualiza a Management API. Os repos OS-SERVICE, BILLING e EXECUTION têm o próprio K8s Apply (por exemplo, para receberem a chave nova do usuário IAM de cada um).
 - **Para trocar `RDS_PASSWORD`, use o Bootstrap, não o K8s Apply.** A senha nova precisa ser aplicada no RDS (`DB/infra`) antes de ir para o Secret. Depois rode o Deploy do repo LAMBDA.
+- **Usuário IAM da Management recriado:** não é preciso rodar nada a mais pela política do DynamoDB. Ao contrário dos repos OS-SERVICE, BILLING e EXECUTION (que pedem o Bootstrap deles), ela fica no `SQS/infra`, com o usuário, e volta no mesmo apply; o Bootstrap e o Deploy já reaplicam os manifests depois do `SQS/infra`, com a chave nova.
 - Mudanças no spec do Deployment (imagem, recursos, probes) já fazem rollout sozinhas.
 
 ---
@@ -177,11 +181,12 @@ Configure em **Settings → Secrets and variables → Actions**:
 | `DD_ENABLED` | Variable (opcional) | Padrão `true`; `false` desliga o Datadog |
 | `DD_SYNTHETICS_STATUS` | Variable (opcional) | Padrão `live`; `paused` pausa os synthetics |
 
-Em relação à fase 3, saem o secret `K8S_REPO_TOKEN` e a variable `K8S_REPO`. O disparo entre repositórios deixou de existir. O SQS não tem secret nem variable: as chaves dos usuários IAM ficam no SSM e são lidas pelo `_k8s-apply.yml`.
+Em relação à fase 3, saem o secret `K8S_REPO_TOKEN` e a variable `K8S_REPO`. O disparo entre repositórios deixou de existir. Não há secret nem variable para o SQS nem para o DynamoDB: as chaves dos usuários IAM ficam no SSM e são lidas pelo `_k8s-apply.yml` (a da Management serve às filas e à tabela do histórico de estoque), e o nome da tabela fica no ConfigMap.
 
-**Permissões IAM do usuário `terraform`**: as mesmas da fase 3, com duas mudanças:
+**Permissões IAM do usuário `terraform`**: as mesmas da fase 3, com três mudanças:
 - O acesso ao state no S3 agora é em `arn:aws:s3:::terraform-state-soat16/techchallenge-oficina/fase-4/*`, com `s3:GetObject`, `s3:PutObject` e `s3:DeleteObject`, mais `s3:ListBucket` no bucket. Os detalhes estão em [kubernetes/README.md](../../kubernetes/README.md) e [DB/README.md](../../DB/README.md).
 - O `SQS/infra` cria filas SQS, usuários IAM com policy inline e access key, e parâmetros SecureString no SSM; o `_k8s-apply.yml` lê esses parâmetros (`ssm:GetParameter`). Detalhes em [SQS/README.md](../../SQS/README.md).
+- O `DB/infra` também cria e apaga a tabela DynamoDB do histórico de estoque, e o `SQS/infra`, a política inline `dynamodb-historico-estoque` do usuário da Management: precisa de permissões no DynamoDB e de `iam:PutUserPolicy` (com `iam:GetUserPolicy` e `iam:DeleteUserPolicy`); hoje o usuário é administrador.
 
 Para o push no ECR:
 - `ecr:GetAuthorizationToken`, em `*`.

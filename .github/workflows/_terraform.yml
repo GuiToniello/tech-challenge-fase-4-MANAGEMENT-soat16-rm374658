@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       working-directory:
-        description: "Pasta do Terraform: kubernetes/infra/foundation, kubernetes/infra/addons (também gerencia o Datadog), DB/infra ou SQS/infra"
+        description: "Pasta do Terraform: kubernetes/infra/foundation, kubernetes/infra/addons (também gerencia o Datadog), DB/infra (RDS e tabela DynamoDB do histórico de estoque) ou SQS/infra (filas, usuários IAM e a política DynamoDB da Management)"
         required: true
         type: string
       command:

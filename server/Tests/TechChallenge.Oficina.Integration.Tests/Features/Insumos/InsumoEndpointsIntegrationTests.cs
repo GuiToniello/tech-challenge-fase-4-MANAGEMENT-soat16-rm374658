@@ -167,4 +167,52 @@ public sealed class InsumoEndpointsIntegrationTests : IDisposable
         Assert.IsAssignableFrom<IStatusCodeHttpResult>(resultado);
         Assert.Equal(StatusCodes.Status404NotFound, ((IStatusCodeHttpResult)resultado).StatusCode);
     }
+
+    [Fact]
+    public async Task PostEPut_DevemRegistrarCadastroEAjusteNoHistoricoDeMovimentacoes()
+    {
+        var endpoints = _fixture.CriarInsumosEndpoints();
+        var created = (CreatedAtRoute<InsumoViewModel>)(await endpoints.Post(InsumoValido(), CancellationToken.None));
+        var id = created.Value!.Id;
+
+        // Primeiro muda o saldo (100 -> 60); depois so o valor, que nao movimenta o estoque
+        Assert.IsType<Ok<InsumoViewModel>>(await endpoints.Put(
+            new AtualizarInsumoCommand { Id = id, Nome = "Óleo Lubrificante", Fabricante = "Mobil", QuantidadeDisponivel = 60, ValorUnitario = 49.90m },
+            CancellationToken.None));
+        Assert.IsType<Ok<InsumoViewModel>>(await endpoints.Put(
+            new AtualizarInsumoCommand { Id = id, Nome = "Óleo Lubrificante", Fabricante = "Mobil", QuantidadeDisponivel = 60, ValorUnitario = 59.90m },
+            CancellationToken.None));
+
+        var movimentacoes = await CenarioOrdemServico.ObterMovimentacoesAsync(_fixture, id);
+
+        Assert.Equal(["Cadastro", "Ajuste"], movimentacoes.Select(movimentacao => movimentacao.Tipo));
+        Assert.All(movimentacoes, movimentacao =>
+        {
+            Assert.Equal("acao", movimentacao.Origem);
+            Assert.Null(movimentacao.OrdemServicoId);
+        });
+        Assert.Equal((100, 0, 100), (movimentacoes[0].Quantidade, movimentacoes[0].SaldoAnterior, movimentacoes[0].SaldoNovo));
+        Assert.Equal((-40, 100, 60), (movimentacoes[1].Quantidade, movimentacoes[1].SaldoAnterior, movimentacoes[1].SaldoNovo));
+    }
+
+    [Fact]
+    public async Task GetMovimentacoes_InsumoSemMovimentacoes_DeveRetornar200ComListaVazia()
+    {
+        Assert.Empty(await CenarioOrdemServico.ObterMovimentacoesAsync(_fixture, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task GetMovimentacoes_InsumoExcluido_DeveRetornar200ComOHistorico()
+    {
+        // A consulta nao passa pelo PostgreSQL: o historico continua disponivel depois da exclusao do insumo (ate expirar pelo TTL)
+        var endpoints = _fixture.CriarInsumosEndpoints();
+        var created = (CreatedAtRoute<InsumoViewModel>)(await endpoints.Post(InsumoValido(), CancellationToken.None));
+        var id = created.Value!.Id;
+        Assert.IsType<NoContent>(await endpoints.Delete(id, CancellationToken.None));
+
+        var cadastro = Assert.Single(await CenarioOrdemServico.ObterMovimentacoesAsync(_fixture, id));
+
+        Assert.Equal("Cadastro", cadastro.Tipo);
+        Assert.Equal(100, cadastro.SaldoNovo);
+    }
 }

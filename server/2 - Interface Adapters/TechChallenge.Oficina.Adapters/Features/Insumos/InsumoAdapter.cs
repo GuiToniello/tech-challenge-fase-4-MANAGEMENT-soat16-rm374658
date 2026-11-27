@@ -26,6 +26,14 @@ namespace TechChallenge.Oficina.Adapters.Features.Insumos
             return CriaErro(result.Error!);
         }
 
+        public object Adapt(InsumoResult<IReadOnlyCollection<MovimentacaoEstoqueViewModel>, Exception> result)
+        {
+            if (result.Value != null)
+                return TypedResults.Ok(result.Value);
+
+            return CriaErro(result.Error!);
+        }
+
         public object Adapt(InsumoResult<bool, Exception> result)
         {
             if (result.Value)

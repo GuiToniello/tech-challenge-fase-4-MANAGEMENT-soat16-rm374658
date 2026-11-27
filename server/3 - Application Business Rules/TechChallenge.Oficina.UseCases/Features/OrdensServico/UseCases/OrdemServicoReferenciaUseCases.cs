@@ -7,6 +7,7 @@ using TechChallenge.Oficina.Entities.Features.Servicos;
 using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Eventos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Contratos;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Commands;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Logging;
 using TechChallenge.Oficina.UseCases.Features.Servicos.UseCases;
@@ -131,6 +132,8 @@ public sealed class OrdemServicoReferenciaUseCases : IOrdemServicoReferenciaUseC
             return ResultadoProcessamentoEvento.Ignorado;
         }
 
+        IReadOnlyCollection<DebitoInsumo> debitos = [];
+
         try
         {
             var servicos = await ObterServicosAsync(referencia.ServicoIds, cancellationToken);
@@ -139,7 +142,7 @@ public sealed class OrdemServicoReferenciaUseCases : IOrdemServicoReferenciaUseC
             // e a nova tentativa da mensagem debita uma unica vez
             await _referenciaGateway.ExecutarEmTransacaoAsync(async () =>
             {
-                await _facade.EstoqueUseCases.DebitarEstoqueParaOrdemServicoAsync(servicos, cancellationToken);
+                debitos = await _facade.EstoqueUseCases.DebitarEstoqueParaOrdemServicoAsync(servicos, cancellationToken);
                 referencia.RegistrarDebitoEstoque();
                 await _referenciaGateway.AtualizarAsync(referencia, cancellationToken);
             }, cancellationToken);
@@ -151,7 +154,33 @@ public sealed class OrdemServicoReferenciaUseCases : IOrdemServicoReferenciaUseC
             return ResultadoProcessamentoEvento.Ignorado;
         }
 
+        // Fora da transacao, depois do commit: um debito desfeito nunca vai para o historico de movimentacoes de estoque
+        await RegistrarDebitosNoHistoricoAsync(evento.OrdemServicoId, debitos);
+
         return ResultadoProcessamentoEvento.Processado;
+    }
+
+    // Uma movimentacao por insumo debitado (origem evento), todas com o mesmo instante: best-effort (o gateway nao lanca) e sem o token do consumidor
+    private async Task RegistrarDebitosNoHistoricoAsync(Guid ordemServicoId, IReadOnlyCollection<DebitoInsumo> debitos)
+    {
+        var ocorridoEm = DateTime.UtcNow;
+
+        foreach (var debito in debitos)
+        {
+            await _facade.HistoricoEstoqueGateway.RegistrarAsync(
+                new MovimentacaoEstoque
+                {
+                    InsumoId = debito.InsumoId,
+                    OcorridoEm = ocorridoEm,
+                    Tipo = TiposMovimentacaoEstoque.DebitoOrdemServico,
+                    Origem = OrigensMovimentacaoEstoque.Evento,
+                    Quantidade = -debito.Quantidade,
+                    SaldoAnterior = debito.SaldoAnterior,
+                    SaldoNovo = debito.SaldoNovo,
+                    OrdemServicoId = ordemServicoId
+                },
+                CancellationToken.None);
+        }
     }
 
     private async Task<(Cliente Cliente, IReadOnlyCollection<Servico> Servicos)> ValidarDadosAsync(Guid clienteId, Guid veiculoId, IReadOnlyCollection<Guid> servicoIds, CancellationToken cancellationToken)

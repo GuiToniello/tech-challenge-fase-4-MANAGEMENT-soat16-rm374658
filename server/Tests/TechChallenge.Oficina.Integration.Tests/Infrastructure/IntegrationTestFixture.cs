@@ -19,6 +19,7 @@ using TechChallenge.Oficina.DB.Data.Features.Veiculos;
 using TechChallenge.Oficina.UseCases.Features.Clientes.Mappings;
 using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Interfaces;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Servicos.UseCases;
@@ -28,7 +29,7 @@ namespace TechChallenge.Oficina.Integration.Tests.Infrastructure;
 
 /// <summary>
 /// Fixture de integração: DI real com EF Core InMemory e mock apenas das integrações externas
-/// (publicação de eventos no SQS e envio de emails pelo Resend).
+/// (publicação de eventos no SQS e envio de emails pelo Resend), com o histórico de movimentações de estoque (DynamoDB) em memória.
 /// Cada instância possui banco de dados isolado (nome único por GUID).
 /// </summary>
 public sealed class IntegrationTestFixture : IDisposable
@@ -38,6 +39,7 @@ public sealed class IntegrationTestFixture : IDisposable
 
     public Mock<IEventosPublisher> EventosPublisherMock { get; } = new();
     public Mock<IOrdemServicoStatusEmailSender> StatusEmailSenderMock { get; } = new();
+    public HistoricoEstoqueEmMemoria HistoricoEstoque { get; } = new();
 
     public IntegrationTestFixture()
     {
@@ -57,6 +59,7 @@ public sealed class IntegrationTestFixture : IDisposable
 
         services.AddSingleton(EventosPublisherMock.Object);
         services.AddSingleton(StatusEmailSenderMock.Object);
+        services.AddSingleton<IHistoricoEstoqueGateway>(HistoricoEstoque);
 
         services.AddAutoMapper(_ => { }, typeof(ClienteProfile).Assembly);
         services.AddScoped<IClienteUseCases, ClienteUseCases>();

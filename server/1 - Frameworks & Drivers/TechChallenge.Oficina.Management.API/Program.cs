@@ -20,6 +20,8 @@ using TechChallenge.Oficina.Email;
 using TechChallenge.Oficina.Email.Configuration;
 using TechChallenge.Oficina.Messaging;
 using TechChallenge.Oficina.Messaging.Configuration;
+using TechChallenge.Oficina.NoSql;
+using TechChallenge.Oficina.NoSql.Configuration;
 using TechChallenge.Oficina.UseCases.Features.Clientes.Mappings;
 using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
@@ -72,7 +74,14 @@ if (sqsSettings.FilasPublicacao.Count == 0 || sqsSettings.FilasPublicacao.Any(st
     throw new InvalidOperationException("Ao menos uma fila de publicação do SQS (SqsSettings:FilasPublicacao) é obrigatória, e nenhuma pode ser vazia.");
 }
 
+// Historico de movimentacoes de estoque no Amazon DynamoDB: complementar e best-effort (a fonte da verdade e o PostgreSQL); credenciais e regiao pela cadeia padrao do AWS SDK
+var dynamoDbSettings = builder.Configuration
+    .GetSection(DynamoDbSettings.SectionName)
+    .Get<DynamoDbSettings>()
+    ?? new DynamoDbSettings();
+
 builder.Services.AddInfraMessaging(sqsSettings);
+builder.Services.AddInfraNoSql(dynamoDbSettings);
 
 builder.Services.AddScoped<IClienteAdapter, ClienteAdapter>();
 builder.Services.AddScoped<IClienteController, ClienteController>();
@@ -96,6 +105,9 @@ catch (Exception ex)
     Environment.ExitCode = 1;
     return;
 }
+
+// Local (DynamoDB Local): cria a tabela do historico de movimentacoes de estoque; na AWS a tabela e do Terraform. Falha so gera aviso.
+await app.Services.GarantirTabelasLocaisAsync();
 
 app.UseLoggingConfiguration();
 app.UseMiddleware<GlobalExceptionHandlerMiddleware>();

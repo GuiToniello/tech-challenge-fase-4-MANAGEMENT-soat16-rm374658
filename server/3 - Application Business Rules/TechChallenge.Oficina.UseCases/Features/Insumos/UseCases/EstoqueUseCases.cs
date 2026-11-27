@@ -1,5 +1,6 @@
 using TechChallenge.Oficina.Entities.Features.Insumos;
 using TechChallenge.Oficina.Entities.Features.Servicos;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 
 namespace TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 
@@ -30,7 +31,7 @@ public sealed class EstoqueUseCases : IEstoqueUseCases
         return true;
     }
 
-    public async Task DebitarEstoqueParaOrdemServicoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<DebitoInsumo>> DebitarEstoqueParaOrdemServicoAsync(IReadOnlyCollection<Servico> servicos, CancellationToken cancellationToken = default)
     {
         var insumosNecessarios = AgruparInsumosPorId(servicos);
         var debitos = new List<(Insumo Insumo, int Quantidade)>(insumosNecessarios.Count);
@@ -49,11 +50,17 @@ public sealed class EstoqueUseCases : IEstoqueUseCases
             debitos.Add((insumo, quantidadeTotal));
         }
 
+        var debitados = new List<DebitoInsumo>(debitos.Count);
+
         foreach (var (insumo, quantidade) in debitos)
         {
+            var saldoAnterior = insumo.QuantidadeDisponivel;
             insumo.DebitarEstoque(quantidade);
             await _insumoGateway.AtualizarAsync(insumo, cancellationToken);
+            debitados.Add(new DebitoInsumo(insumo.Id, quantidade, saldoAnterior, insumo.QuantidadeDisponivel));
         }
+
+        return debitados;
     }
 
     private static Dictionary<Guid, int> AgruparInsumosPorId(IReadOnlyCollection<Servico> servicos)

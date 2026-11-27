@@ -13,6 +13,7 @@ using TechChallenge.Oficina.UseCases.Features.Clientes.UseCases;
 using TechChallenge.Oficina.UseCases.Features.Eventos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.UseCases.Features.Eventos.Interfaces;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Commands;
 using TechChallenge.Oficina.UseCases.Features.OrdensServico.Logging;
@@ -32,6 +33,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
     private readonly Mock<IEstoqueUseCases> _estoqueUseCasesMock = new();
     private readonly Mock<IEventosPublisher> _eventosPublisherMock = new();
     private readonly Mock<IOrdemServicoStatusEmailSender> _statusEmailSenderMock = new();
+    private readonly Mock<IHistoricoEstoqueGateway> _historicoEstoqueGatewayMock = new();
     private readonly Mock<IOrdemServicoReferenciaUseCasesFacade> _facadeMock = new();
     private bool _emTransacao;
 
@@ -40,6 +42,11 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         _facadeMock.SetupGet(f => f.EstoqueUseCases).Returns(_estoqueUseCasesMock.Object);
         _facadeMock.SetupGet(f => f.EventosPublisher).Returns(_eventosPublisherMock.Object);
         _facadeMock.SetupGet(f => f.OrdemServicoStatusEmailSender).Returns(_statusEmailSenderMock.Object);
+        _facadeMock.SetupGet(f => f.HistoricoEstoqueGateway).Returns(_historicoEstoqueGatewayMock.Object);
+        // Debito sem insumos por padrao (o Moq devolveria null para a colecao); os testes do debito configuram os insumos debitados
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         _referenciaGatewayMock
             .Setup(g => g.ExecutarEmTransacaoAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
             .Returns<Func<Task>, CancellationToken>(async (operacao, _) =>
@@ -558,7 +565,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         _estoqueUseCasesMock
             .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
             .Callback(() => debitoEmTransacao = _emTransacao)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync([]);
         _referenciaGatewayMock
             .Setup(g => g.AtualizarAsync(referencia, It.IsAny<CancellationToken>()))
             .Callback(() => marcaEmTransacao = _emTransacao && referencia.EstoqueDebitado)
@@ -573,6 +580,65 @@ public sealed class OrdemServicoReferenciaUseCasesTests
     }
 
     [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_DeveRegistrarUmDebitoPorInsumoNoHistoricoDepoisDaTransacao()
+    {
+        var useCases = CriarUseCases();
+        var servico = CriarServico("Revisao", (2, 15.50m), (1, 30m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id, StatusOrdemServico.AguardandoAprovacao);
+        var oleoId = Guid.NewGuid();
+        var filtroId = Guid.NewGuid();
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new DebitoInsumo(oleoId, 2, 10, 8), new DebitoInsumo(filtroId, 1, 5, 4)]);
+        var registros = new List<(MovimentacaoEstoque Movimentacao, bool EmTransacao, bool EstoqueDebitado, CancellationToken Token)>();
+        _historicoEstoqueGatewayMock
+            .Setup(h => h.RegistrarAsync(It.IsAny<MovimentacaoEstoque>(), It.IsAny<CancellationToken>()))
+            .Callback<MovimentacaoEstoque, CancellationToken>((movimentacao, token) => registros.Add((movimentacao, _emTransacao, referencia.EstoqueDebitado, token)))
+            .Returns(Task.CompletedTask);
+        using var cancelamento = new CancellationTokenSource();
+
+        var resultado = await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 61m), cancelamento.Token);
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        Assert.Equal(2, registros.Count);
+        // Fora da transacao (depois do debito e da marca na referencia), sem o token do consumidor e todas com o mesmo instante
+        Assert.All(registros, registro =>
+        {
+            Assert.False(registro.EmTransacao);
+            Assert.True(registro.EstoqueDebitado);
+            Assert.Equal(CancellationToken.None, registro.Token);
+            Assert.Equal("DebitoOrdemServico", registro.Movimentacao.Tipo);
+            Assert.Equal("evento", registro.Movimentacao.Origem);
+            Assert.Equal(referencia.Id, registro.Movimentacao.OrdemServicoId);
+        });
+        Assert.Single(registros.Select(registro => registro.Movimentacao.OcorridoEm).Distinct());
+        var oleo = Assert.Single(registros, registro => registro.Movimentacao.InsumoId == oleoId).Movimentacao;
+        Assert.Equal((-2, 10, 8), (oleo.Quantidade, oleo.SaldoAnterior, oleo.SaldoNovo));
+        var filtro = Assert.Single(registros, registro => registro.Movimentacao.InsumoId == filtroId).Movimentacao;
+        Assert.Equal((-1, 5, 4), (filtro.Quantidade, filtro.SaldoAnterior, filtro.SaldoNovo));
+    }
+
+    [Fact]
+    public async Task ProcessarPagamentoAprovadoAsync_NaoDeveRegistrarNoHistorico_QuandoATransacaoFalhaDepoisDoDebito()
+    {
+        var useCases = CriarUseCases();
+        var servico = CriarServico("Troca de oleo", (2, 15.50m));
+        var referencia = CriarReferenciaExistente(Guid.NewGuid(), Guid.NewGuid(), servico.Id);
+        _estoqueUseCasesMock
+            .Setup(e => e.DebitarEstoqueParaOrdemServicoAsync(It.IsAny<IReadOnlyCollection<Servico>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new DebitoInsumo(Guid.NewGuid(), 2, 10, 8)]);
+        _referenciaGatewayMock
+            .Setup(g => g.AtualizarAsync(referencia, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Banco indisponivel."));
+
+        var action = async () => await useCases.ProcessarPagamentoAprovadoAsync(new PagamentoAprovado(referencia.Id, Guid.NewGuid(), 31m));
+
+        // A transacao e desfeita e a mensagem volta para a fila: o debito desfeito nao vai para o historico
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
+    }
+
+    [Fact]
     public async Task ProcessarPagamentoAprovadoAsync_DeveRetornarIgnorado_QuandoReferenciaNaoExiste()
     {
         var useCases = CriarUseCases();
@@ -582,6 +648,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
         Assert.Empty(_estoqueUseCasesMock.Invocations);
         _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
     }
 
     [Fact]
@@ -597,6 +664,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
         Assert.Empty(_estoqueUseCasesMock.Invocations);
         _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
     }
 
     [Fact]
@@ -622,6 +690,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal("regra_negocio", propriedades["TipoFalha"]);
         Assert.Equal(referencia.Id, propriedades["OrdemServicoId"]);
         Assert.Equal("Estoque insuficiente do insumo 'Insumo 1'. Disponivel: 1, Necessario: 2.", propriedades["Motivo"]);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
     }
 
     [Fact]
@@ -641,6 +710,7 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         Assert.Equal("estoque_debito", propriedades["Etapa"]);
         Assert.Equal("nao_encontrado", propriedades["TipoFalha"]);
         Assert.Equal($"Servico com ID '{servicoRemovidoId}' nao encontrado.", propriedades["Motivo"]);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
     }
 
     [Fact]
@@ -658,5 +728,6 @@ public sealed class OrdemServicoReferenciaUseCasesTests
         await Assert.ThrowsAsync<InvalidOperationException>(action);
         Assert.False(referencia.EstoqueDebitado);
         _referenciaGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<OrdemServicoReferencia>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_historicoEstoqueGatewayMock.Invocations);
     }
 }

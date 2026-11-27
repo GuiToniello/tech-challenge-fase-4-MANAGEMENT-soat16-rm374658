@@ -1,4 +1,5 @@
 using AutoMapper;
+using TechChallenge.Oficina.UseCases.Features.Insumos.Interfaces;
 using TechChallenge.Oficina.UseCases.Features.Insumos.ViewModels;
 using TechChallenge.Oficina.Entities.Features.Insumos;
 
@@ -9,5 +10,6 @@ public sealed class InsumoProfile : Profile
     public InsumoProfile()
     {
         CreateMap<Insumo, InsumoViewModel>();
+        CreateMap<MovimentacaoEstoque, MovimentacaoEstoqueViewModel>();
     }
 }

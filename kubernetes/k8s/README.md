@@ -26,7 +26,7 @@ A pasta da API contém:
 - A API tem um Deployment (`management-api`). Ele começa com uma réplica e verifica a saúde em `/health`.
 - O Deployment é exposto por um Service do tipo `NodePort`, com porta fixa (30080). A porta só aceita tráfego de dentro da VPC, então o Service não fica exposto diretamente na Internet.
 - O API Gateway recebe as requisições HTTPS e, pelo VPC Link e pelo NLB interno (criados pela foundation), entrega o caminho `/management/...` no NodePort da API (seção 8).
-- O ConfigMap (`management-api-config`) guarda configurações não sensíveis, inclusive os nomes das filas SQS. O Secret (`oficina-api-secrets`) guarda os dados sensíveis (conexão com o RDS, chave do Resend e chave de acesso ao SQS).
+- O ConfigMap (`management-api-config`) guarda configurações não sensíveis, inclusive os nomes das filas SQS e da tabela DynamoDB. O Secret (`oficina-api-secrets`) guarda os dados sensíveis (conexão com o RDS, chave do Resend e chave do usuário IAM da Management, que acessa o SQS e o DynamoDB).
 - Um HPA acompanha CPU e memória e ajusta o Deployment entre 1 e 2 réplicas, com base nas métricas do Metrics Server.
 - O Datadog Agent (namespace `datadog`, instalado pelo `kubernetes/infra/addons`) coleta métricas, logs e traces dos pods. O tracer .NET (APM) é injetado pelo próprio Agent nos pods dos namespaces `oficina`, `os-service`, `billing` e `execution`, sem mudança na imagem (seção 4.4).
 
@@ -55,11 +55,11 @@ flowchart TD
 ## 3. Ordem de aplicação
 Pré-requisitos (o workflow **Bootstrap** faz os quatro e, no fim, aplica os manifests):
 1. Cluster, API Gateway e addons: foundation → addons, em `kubernetes/infra/`. O API Gateway, o VPC Link e o NLB são criados pela foundation. O Metrics Server e o Datadog Agent são instalados pelo Terraform via Helm, em `kubernetes/infra/addons`.
-2. RDS: `DB/infra` ([DB/README.md](../../DB/README.md)).
-3. Filas SQS e a chave da Management no SSM: `SQS/infra` ([SQS/README.md](../../SQS/README.md)), em paralelo com os passos 1 e 2.
+2. RDS e a tabela DynamoDB do histórico de movimentações de estoque: `DB/infra` ([DB/README.md](../../DB/README.md)).
+3. Filas SQS, a chave da Management no SSM e a política dela na tabela DynamoDB: `SQS/infra` ([SQS/README.md](../../SQS/README.md)), em paralelo com os passos 1 e 2.
 4. Imagem no ECR: build e push da Management API (`server/`) no repositório ECR `techchallenge-oficina-management`.
 
-A aplicação é feita pelo CI, sempre pelo workflow reutilizável [_k8s-apply.yml](../../.github/workflows/_k8s-apply.yml): ele descobre o endpoint do RDS, lê a chave do SQS no SSM, gera o `kubernetes/k8s/.env`, roda `kubectl apply -k kubernetes/k8s` e, se pedido, faz o rollout restart da API. Ele é chamado:
+A aplicação é feita pelo CI, sempre pelo workflow reutilizável [_k8s-apply.yml](../../.github/workflows/_k8s-apply.yml): ele descobre o endpoint do RDS, lê no SSM a chave do usuário IAM da Management (SQS e DynamoDB), gera o `kubernetes/k8s/.env`, roda `kubectl apply -k kubernetes/k8s` e, se pedido, faz o rollout restart da API. Ele é chamado:
 - pelo **Bootstrap**, no fim, com restart;
 - pelo **Deploy**, em push na `main` que altere qualquer parte (aplicação, `DB/infra`, `SQS/infra`, `kubernetes/infra` ou `kubernetes/k8s`), com restart;
 - pelo workflow manual **K8s Apply** ([k8s-apply.yml](../../.github/workflows/k8s-apply.yml)), com o input `restart-pods` (padrão `true`).
@@ -83,7 +83,7 @@ Opcional: para acessar a API via localhost sem passar pelo API Gateway, encaminh
 
 ## 4. Recursos criados para a API
 Para a API foram criados os seguintes recursos:
-1. ConfigMap `management-api-config` com configurações não sensíveis (`ASPNETCORE_ENVIRONMENT=Production`, `ASPNETCORE_URLS=http://+:8080`), o nível de log do Serilog (`Serilog__MinimumLevel__Default=Information` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore=Warning`), as filas SQS (`SqsSettings__FilaConsumo=techchallenge-oficina-management.fifo` e a lista de publicação, o *fan-out* da ADR-020: `SqsSettings__FilasPublicacao__0=techchallenge-oficina-os-service.fifo`, `SqsSettings__FilasPublicacao__1=techchallenge-oficina-billing.fifo` e `SqsSettings__FilasPublicacao__2=techchallenge-oficina-execution.fifo`) e a região (`AWS_REGION=us-east-1`). A chave com ponto é válida em ConfigMap e em `envFrom` no EKS 1.36.
+1. ConfigMap `management-api-config` com configurações não sensíveis (`ASPNETCORE_ENVIRONMENT=Production`, `ASPNETCORE_URLS=http://+:8080`), o nível de log do Serilog (`Serilog__MinimumLevel__Default=Information` e `Serilog__MinimumLevel__Override__Microsoft.AspNetCore=Warning`), as filas SQS (`SqsSettings__FilaConsumo=techchallenge-oficina-management.fifo` e a lista de publicação, o *fan-out* da ADR-020: `SqsSettings__FilasPublicacao__0=techchallenge-oficina-os-service.fifo`, `SqsSettings__FilasPublicacao__1=techchallenge-oficina-billing.fifo` e `SqsSettings__FilasPublicacao__2=techchallenge-oficina-execution.fifo`), a tabela do histórico de movimentações de estoque (`DynamoDbSettings__TabelaHistoricoEstoque=techchallenge-oficina-management-estoque-historico`, ADR-027; sem `DynamoDbSettings__ServiceUrl`, que é só local) e a região (`AWS_REGION=us-east-1`). A chave com ponto é válida em ConfigMap e em `envFrom` no EKS 1.36.
 2. Secret `oficina-api-secrets`, gerado pelo Kustomize a partir do `k8s/.env` (seção 5).
 3. Deployment com 1 réplica inicial, porta 8080, probes (startup, liveness e readiness) em `/health`, recursos de 100m/128Mi (requests) e 500m/512Mi (limits) e os labels do Datadog (seção 4.4).
 4. Service do tipo NodePort (porta 80 → 8080, com `nodePort` fixo 30080; seção 8).
@@ -120,13 +120,13 @@ O admission controller do Datadog lê esses labels e injeta `DD_ENV` e `DD_SERVI
 O [kustomization.yaml](kustomization.yaml) gera o Secret `oficina-api-secrets` a partir do `k8s/.env`, com as chaves de [.env.example](.env.example):
 - `DatabaseSettings__ConnectionString`: aponta para o RDS criado em [DB/](../../DB/README.md).
 - `ResendSettings__ApiKey`: chave de envio de email (Resend).
-- `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`: chave do usuário IAM `techchallenge-oficina-management-sqs`, que consome a fila da Management e publica nas do OS Service, do Billing e do Execução e Produção ([SQS/README.md](../../SQS/README.md)). O SDK da AWS lê essas variáveis sozinho.
+- `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`: chave do usuário IAM `techchallenge-oficina-management-sqs`, que consome a fila da Management, publica nas do OS Service, do Billing e do Execução e Produção e grava e consulta a tabela DynamoDB do histórico de movimentações de estoque (política `dynamodb-historico-estoque`) ([SQS/README.md](../../SQS/README.md)). O SDK da AWS lê essas variáveis sozinho.
 
 No CI, o apply dos manifests gera o `kubernetes/k8s/.env`:
 - Descobre o endpoint pelo identifier do RDS (variable `RDS_INSTANCE_IDENTIFIER`, `techchallenge-oficina-postgres`).
 - Monta a connection string com as variables `RDS_DATABASE` e `RDS_USERNAME` e o secret `RDS_PASSWORD`, o mesmo que o `DB/infra` usa como senha master do RDS. O repo LAMBDA precisa ter o mesmo valor.
 - Usa o secret `RESEND_API_KEY` para `ResendSettings__ApiKey`.
-- Lê a chave do SQS no SSM Parameter Store (`/techchallenge-oficina/sqs/management/access-key-id` e `/secret-access-key`), criada pelo `SQS/infra`, e mascara os valores no log. Não há secret do GitHub para ela.
+- Lê a chave do usuário IAM da Management no SSM Parameter Store (`/techchallenge-oficina/sqs/management/access-key-id` e `/secret-access-key`), criada pelo `SQS/infra`, no passo "Adicionar a chave do usuário IAM da Management (SQS e DynamoDB) ao kubernetes/k8s/.env", e mascara os valores no log. Não há secret do GitHub para ela.
 
 O `k8s/.env` é ignorado pelo Git e nunca deve ser versionado; apenas o `.env.example` é versionado.
 
@@ -202,6 +202,6 @@ O build deve gerar:
 ## 10. Finalização
 Antes de promover para ambientes compartilhados (qa/homolog/prod), recomenda-se:
 1. Trocar a tag `latest` por tags versionadas publicadas pelas pipelines (`build-push`), para ter deploys rastreáveis e rollback. Com elas, dá para adicionar o label `tags.datadoghq.com/version`.
-2. Manter a senha do RDS e a chave do Resend apenas nos secrets do GitHub (`RDS_PASSWORD`, `RESEND_API_KEY`), e a chave do SQS apenas no SSM.
+2. Manter a senha do RDS e a chave do Resend apenas nos secrets do GitHub (`RDS_PASSWORD`, `RESEND_API_KEY`), e a chave do usuário IAM da Management (SQS e DynamoDB) apenas no SSM.
 3. Revisar requests/limits de CPU e memória conforme a carga real. O node group tem 2 nodes `t3.small` fixos (min/desired/max 2/2/2), então o HPA pode criar pods que ficam `Pending` por falta de capacidade. Com o Datadog, a folga é menor (seção 6.1).
 4. Garantir que a foundation (API Gateway e NLB) e o `kubernetes/infra/addons` (Metrics Server e Datadog Agent) estejam aplicados antes do apply dos manifests.

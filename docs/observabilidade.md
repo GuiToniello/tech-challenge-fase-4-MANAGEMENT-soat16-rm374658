@@ -47,7 +47,7 @@ As quatro APIs configuram o Serilog do mesmo jeito, em `Extensions/LoggingExtens
 - `AddLoggingConfiguration`: lê a seção `Serilog` da configuração e escreve no console com um `ExpressionTemplate`, 1 JSON por linha;
 - `UseLoggingConfiguration`: grava 1 log por requisição (`UseSerilogRequestLogging`).
 
-As camadas internas (UseCases, Controllers e Messaging) usam só `ILogger<T>`; o Serilog fica no projeto da API (ADR-001).
+As camadas internas (UseCases, Controllers, Messaging e NoSql) usam só `ILogger<T>`; o Serilog fica no projeto da API (ADR-001).
 
 ### 2.1 Chaves
 
@@ -116,7 +116,7 @@ Erro com exceção na Management (banco indisponível; mensagem e stack encurtad
 
 ## 3. Catálogo de eventos
 
-Os quatro serviços usam os mesmos nomes de evento, `EventId`, propriedades e valores. Cada um tem a própria cópia do catálogo em `OrdemServicoLogEventos.cs` (no Execução e Produção, `ExecucaoLogEventos.cs`), no projeto UseCases: o da Management é [este](../server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs). O ciclo de vida da OS sai do OS Service (`os-service-api`); o orçamento e o pagamento saem do Billing (`billing-api`); a fila de produção (diagnóstico e execução) sai do Execução e Produção (`execution-api`); a validação da OS, o débito de estoque e o e-mail de status saem da Management (`management-api`). O 9001 fica no middleware global, e o 9002, no `Program.cs` de cada API.
+Os quatro serviços usam os mesmos nomes de evento, `EventId`, propriedades e valores. Cada um tem a própria cópia do catálogo em `OrdemServicoLogEventos.cs` (no Execução e Produção, `ExecucaoLogEventos.cs`), no projeto UseCases: o da Management é [este](../server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs). O ciclo de vida da OS sai do OS Service (`os-service-api`); o orçamento e o pagamento saem do Billing (`billing-api`); a fila de produção (diagnóstico e execução) sai do Execução e Produção (`execution-api`); a validação da OS, o débito de estoque, o histórico de movimentações de estoque e o e-mail de status saem da Management (`management-api`). O 9001 fica no middleware global, e o 9002, no `Program.cs` de cada API.
 
 | Evento (`EventId`) | Nível | Onde é emitido | Propriedades |
 |---|---|---|---|
@@ -127,6 +127,8 @@ Os quatro serviços usam os mesmos nomes de evento, `EventId`, propriedades e va
 | `integracao.falha` (3001) | Warning | `management-api`: e-mail de mudança de status, ao consumir `OrdemServicoStatusAlterado`. A falha, inclusive o timeout do `HttpClient`, é engolida (modo degradado) e a atualização do status continua valendo. **Inativo na AWS** (seção 8) | `Integracao` = `resend`, `Operacao` = `notificacao_status`, `OrdemServicoId`, `StatusNovo`, `error.*` |
 | `integracao.falha` (3001) | Error | Os quatro serviços: `EventosPublisher`, quando o envio do evento a uma das filas de destino falha. Registra e relança: numa requisição, ela termina em 500, com a alteração já gravada; no consumo de um evento, a mensagem volta para a fila. As filas anteriores da lista já receberam o evento (entrega parcial, ADR-020) | `Integracao` = `sqs`, `Operacao` = `publicacao`, `Tipo`, `OrdemServicoId`, `Fila` (a fila que falhou), `error.*` |
 | `integracao.falha` (3001) | Error | Os quatro serviços: `SqsConsumidorHostedService`, quando falha ao obter a fila, receber mensagens ou processar uma mensagem. A mensagem não é apagada: volta depois do *visibility timeout* e, no 5º recebimento, vai para a DLQ | `Integracao` = `sqs`, `Operacao` = `consumo`, `error.*` e, conforme o caso, `Tipo`, `EventoId`, `MessageId` (`MensagemId` no OS Service, no Billing e no Execução e Produção) e `Fila` |
+| `integracao.falha` (3001) | Warning | `management-api`: `HistoricoEstoqueGateway`, quando falha a gravação de uma movimentação de estoque no DynamoDB (cadastro e ajuste do insumo, pela rota, e débito do `PagamentoAprovado`). A falha é engolida (*best-effort*, ADR-027): a rota responde normalmente, o evento é processado e só aquela linha falta no histórico | `Integracao` = `dynamodb`, `Operacao` = `registro_historico`, `InsumoId`, `Tipo` (`Cadastro`, `Ajuste` ou `DebitoOrdemServico`), `error.*` |
+| `integracao.falha` (3001) | Error | `management-api`: `HistoricoEstoqueGateway`, quando falha a consulta das movimentações (`GET /api/insumos/{id}/movimentacoes`). Registra e relança: a rota responde 500, pelo middleware global, que também registra o `http.erro_nao_tratado`, sem `Integracao` | `Integracao` = `dynamodb`, `Operacao` = `consulta_historico`, `InsumoId`, `error.*` |
 | `evento.publicado` (4001) | Information | Os quatro serviços: `EventosPublisher`, depois de enviar o evento a cada fila de destino. Com o *fan-out*, sai um log por fila, com o mesmo `EventoId` | `Tipo`, `EventoId`, `OrdemServicoId`, `Fila` |
 | `evento.consumido` (4002) | Information | Os quatro serviços: `SqsConsumidorHostedService`, evento processado | `Tipo`, `EventoId`, `Fila`; na Management, também `OrdemServicoId`, `MessageId` e `Resultado` |
 | `evento.ignorado` (4003) | Information na Management, Warning nos outros três | Os quatro serviços: evento repetido, transição que o status atual não permite, OS desconhecida ou tipo que o serviço não trata (com o *fan-out*, cada serviço recebe também eventos que não usa). A mensagem é apagada (seção 3, observações) | As mesmas de `evento.consumido` |
@@ -139,7 +141,8 @@ Observações:
 - **Histórico da saga, no OS Service**: além dos eventos da tabela, o `os-service-api` emite o `integracao.falha` do histórico da saga no DynamoDB (`dynamodb`: `registro_historico` como `Warning`, sem interromper o consumo do evento, e `consulta_historico` como `Error`), que entra em `oficina.integracao.erros` como os demais. O histórico guarda o que o OS Service fez com cada evento consumido de uma OS (processado ou ignorado, com o motivo) e é consultado pela rota `GET /os/api/ordens-servico/{id}/historico-saga` ([ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md)). Os detalhes estão na [observabilidade do OS Service](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/observabilidade.md).
 - **Falha ao buscar o cliente para a notificação de status** (Management): sai um `Warning` sem `EventId` e sem `Integracao`, porque não é falha do Resend. Não conta em `oficina.integracao.erros`.
 - **Resend sem configuração** (Management): sem `ApiKey` ou `FromEmail`, o e-mail de status não sai, e nada é registrado. Chave inválida ou Resend fora do ar geram o `integracao.falha` (`notificacao_status`).
-- **Falha no débito de estoque** (Management): ao consumir `PagamentoAprovado`, estoque insuficiente ou serviço ou insumo inexistente geram `os.falha` com `Etapa` = `estoque_debito`, e o evento é ignorado: não há nova tentativa nem compensação, porque o pagamento já foi aprovado (ADR-012).
+- **Falha no débito de estoque** (Management): ao consumir `PagamentoAprovado`, estoque insuficiente ou serviço ou insumo inexistente geram `os.falha` com `Etapa` = `estoque_debito`, e o evento é ignorado: não há nova tentativa nem compensação, porque o pagamento já foi aprovado (ADR-012). Nada entra no histórico de movimentações de estoque, porque nenhum saldo mudou (ADR-027).
+- **Histórico de movimentações de estoque, na Management**: o cadastro e o ajuste do saldo do insumo e o débito do `PagamentoAprovado` (um item por insumo, depois do commit) são gravados no DynamoDB e consultados pela rota `GET /management/api/insumos/{id}/movimentacoes` ([ADR-027](./adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)). Uma falha na gravação só gera o `integracao.falha` (`Warning`) da tabela acima, que entra em `oficina.integracao.erros` como os demais.
 - **Falha ao publicar um evento numa requisição** (OS Service, Billing e Execução e Produção; a Management só publica ao consumir eventos): saem o `integracao.falha` (`sqs`, `publicacao`) e o `http.erro_nao_tratado` sem `Integracao`, e a rota responde 500. A alteração já foi gravada (ADR-020).
 - **Evento ignorado**: é o comportamento esperado da idempotência (ADR-020), não um erro. Quando o OS Service ignora o evento de uma OS inexistente ou com transição não permitida, um log `Information` sem `EventId`, antes do `evento.ignorado`, explica o motivo, que também fica no histórico da saga da OS (ADR-026).
 - **Banco indisponível**: o `FalhasBanco.cs` do projeto DB de cada API (o da Management é [este](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.DB/FalhasBanco.cs)) percorre a cadeia de `InnerException`, porque a execution strategy do Npgsql embrulha as falhas transitórias em `InvalidOperationException`. A cadeia é lida de fora para dentro e decide no primeiro destes tipos: `OperationCanceledException` não conta, porque é cancelamento (o timeout do `HttpClient` no envio pelo Resend ou a consulta cancelada quando o cliente abandona a requisição, os dois com uma `TimeoutException` interna); `PostgresException` só conta quando é transitória (`IsTransient`); outra `NpgsqlException` ou `TimeoutException` conta sempre. Violação de restrição (`PostgresException` 23xxx, como excluir um cliente que tem veículos) **não** é falha de integração: o `http.erro_nao_tratado` sai sem `Integracao`, com `error.kind` = `Microsoft.EntityFrameworkCore.DbUpdateException`; a `PostgresException` e o `SqlState` aparecem no `error.stack`.
@@ -181,13 +184,13 @@ As etapas do pagamento (`pagamento_verificacao` e `pagamento_notificacao`) apare
 | `Integracao` | `mercadopago` | Falha na chamada ao Mercado Pago (`integracao.falha`, só no Billing) |
 | `Integracao` | `postgres` | Banco indisponível (`http.erro_nao_tratado`) |
 | `Integracao` | `sqs` | Falha ao publicar ou consumir um evento (`integracao.falha`, nos quatro serviços) |
-| `Integracao` | `dynamodb` | Falha ao gravar ou consultar o histórico de pagamentos (Billing), o histórico da saga (OS Service) ou a linha do tempo da produção (Execução e Produção) (`integracao.falha`) |
+| `Integracao` | `dynamodb` | Falha ao gravar ou consultar o histórico de movimentações de estoque (Management), o histórico de pagamentos (Billing), o histórico da saga (OS Service) ou a linha do tempo da produção (Execução e Produção) (`integracao.falha`, nos quatro serviços) |
 | `Operacao` | `envio_orcamento` | Envio do orçamento por e-mail, no Billing (`Integracao` = `resend`) |
 | `Operacao` | `notificacao_status` | E-mail de mudança de status, na Management (`Integracao` = `resend`) |
 | `Operacao` | `criacao_cobranca` e `consulta_pagamento` | Cobrança e consulta do pagamento, no Billing (`Integracao` = `mercadopago`) |
 | `Operacao` | `publicacao` | Envio de um evento a uma das filas de destino (`Integracao` = `sqs`) |
 | `Operacao` | `consumo` | Leitura da própria fila e processamento da mensagem (`Integracao` = `sqs`) |
-| `Operacao` | `registro_historico` e `consulta_historico` | Gravação (`Warning`, *best-effort*) e consulta (`Error`) do histórico de pagamentos, no Billing, do histórico da saga, no OS Service, e da linha do tempo da produção, no Execução e Produção (`Integracao` = `dynamodb`) |
+| `Operacao` | `registro_historico` e `consulta_historico` | Gravação (`Warning`, *best-effort*) e consulta (`Error`) do histórico de movimentações de estoque, na Management, do histórico de pagamentos, no Billing, do histórico da saga, no OS Service, e da linha do tempo da produção, no Execução e Produção (`Integracao` = `dynamodb`) |
 
 ### 4.3 Status (`StatusAnterior` e `StatusNovo`)
 
@@ -219,8 +222,8 @@ As métricas de log são criadas por Terraform em [kubernetes/infra/addons/modul
 | `evento.publicado`, `evento.consumido`, `evento.ignorado`, no Billing, os eventos do orçamento e do pagamento e, no Execução e Produção, os `execucao.*` | — | — | — | — (consulta no Log Explorer) | — |
 | `app.migracao_falhou` | — | — | — | Logs de erro recentes (sai como `Fatal`, que o Datadog mostra com status `emergency`) | — (a falha de migração aparece nos monitores de CrashLoopBackOff e restarts, só para a Management; ver abaixo) |
 
-- O widget **Logs de erro recentes** lista os logs das quatro APIs com `status:(error OR emergency)`: todo log `Error` (como `http.erro_nao_tratado` e os `integracao.falha` do SQS e, no Billing, do envio do orçamento, do Mercado Pago e da consulta do histórico de pagamentos no DynamoDB; no OS Service, da consulta do histórico da saga no DynamoDB; e, no Execução e Produção, da consulta da linha do tempo no DynamoDB) e o `app.migracao_falhou`, que é `Fatal`. Uma consulta só com `status:error` deixa a falha de migração de fora.
-- Os ids (`OrdemServicoId`, `ClienteId`, `VeiculoId`, `EventoId`) são atributos de log e **nunca** viram tags de métrica (cardinalidade).
+- O widget **Logs de erro recentes** lista os logs das quatro APIs com `status:(error OR emergency)`: todo log `Error` (como `http.erro_nao_tratado` e os `integracao.falha` do SQS e, na Management, da consulta do histórico de movimentações de estoque no DynamoDB; no Billing, do envio do orçamento, do Mercado Pago e da consulta do histórico de pagamentos no DynamoDB; no OS Service, da consulta do histórico da saga no DynamoDB; e, no Execução e Produção, da consulta da linha do tempo no DynamoDB) e o `app.migracao_falhou`, que é `Fatal`. Uma consulta só com `status:error` deixa a falha de migração de fora.
+- Os ids (`OrdemServicoId`, `ClienteId`, `VeiculoId`, `EventoId` e `InsumoId`) são atributos de log e **nunca** viram tags de métrica (cardinalidade).
 - As métricas de log não têm backfill: só contam os eventos ingeridos depois que a métrica existe. Para popular o dashboard, rode o fluxo de OS (collection do Postman do repo OS-SERVICE) depois do deploy do Datadog.
 - Os demais widgets e monitores (latência p95, CPU e memória, restarts, nós, réplicas, `http.can_connect`, synthetics e SLO) usam métricas do APM e do Agent, sem depender dos logs. Estão no [kubernetes/infra/DATADOG.md](../kubernetes/infra/DATADOG.md). Os de APM, `http.can_connect` e synthetics cobrem as quatro APIs; os de Kubernetes (CPU, memória, CrashLoopBackOff, restarts e réplicas) filtram só o namespace `oficina` (limitação registrada na ADR-014).
 
@@ -233,7 +236,7 @@ As quatro APIs têm os mesmos endpoints:
 | `/health` | Não | Inalterada: `{"status": "ok"}` (200) | Probes do Kubernetes (incluindo o `readinessProbe`), NLB, API Gateway, `HEALTHCHECK` do Dockerfile, e2e e synthetics do Datadog (`GET /management/health`, `GET /os/health`, `GET /billing/health` e `GET /execution/health` pelo API Gateway) |
 | `/health/ready` | Sim (`AddDbContextCheck`, check `postgres` com a tag `ready`) | `Healthy` (200) ou `Unhealthy` (503) | Só o `http_check` do Datadog Agent (service check `http.can_connect`, com as instâncias `management-api`, `os-service-api`, `billing-api` e `execution-api`) |
 
-Os dois são anônimos e não geram log de requisição, nem o `503` do `/health/ready` com o banco fora: nesse caso, a falha aparece no log `Error` do próprio `HealthCheckService`, com o check `postgres` (seção 2.2). O `readinessProbe` continua em `/health` para que uma queda do banco não tire todos os pods do Service. O `/health/ready` não verifica o SQS nem o DynamoDB (Billing, OS Service e Execução e Produção): uma falha neles aparece no `integracao.falha` (`sqs` ou `dynamodb`).
+Os dois são anônimos e não geram log de requisição, nem o `503` do `/health/ready` com o banco fora: nesse caso, a falha aparece no log `Error` do próprio `HealthCheckService`, com o check `postgres` (seção 2.2). O `readinessProbe` continua em `/health` para que uma queda do banco não tire todos os pods do Service. O `/health/ready` não verifica o SQS nem o DynamoDB, em nenhuma das quatro APIs: uma falha neles aparece no `integracao.falha` (`sqs` ou `dynamodb`).
 
 ## 7. Consultas úteis
 
@@ -245,7 +248,8 @@ No Log Explorer do Datadog:
 | Falhas de uma etapa | `@evento:os.falha @Etapa:estoque_debito` |
 | Recursos inexistentes | `@evento:os.falha @TipoFalha:nao_encontrado` |
 | Erros de integração (Resend, Mercado Pago, banco, SQS e DynamoDB) | `@Integracao:*` |
-| Só e-mail, só pagamento, só banco, só fila ou só o DynamoDB (histórico de pagamentos, histórico da saga e linha do tempo da produção) | `@Integracao:resend`, `@Integracao:mercadopago`, `@Integracao:postgres`, `@Integracao:sqs` ou `@Integracao:dynamodb` |
+| Só e-mail, só pagamento, só banco, só fila ou só o DynamoDB (histórico de movimentações de estoque, histórico de pagamentos, histórico da saga e linha do tempo da produção) | `@Integracao:resend`, `@Integracao:mercadopago`, `@Integracao:postgres`, `@Integracao:sqs` ou `@Integracao:dynamodb` |
+| Falhas no histórico de movimentações de um insumo (Management) | `@Integracao:dynamodb @InsumoId:<guid>` |
 | Erros 500 | `@evento:http.erro_nao_tratado` |
 | Histórico de uma OS nos quatro serviços | `@OrdemServicoId:<guid>` |
 | Transições para um status | `@evento:os.status_alterado @StatusNovo:em_execucao` |
@@ -274,7 +278,7 @@ O `integracao.falha` com `Operacao` = `notificacao_status` só pode aparecer qua
 
 - **Sem dados pessoais (PII).** Nunca logar CPF/CNPJ, e-mail, nome, placa ou JWT. Os logs levam só GUIDs e os valores fixos deste documento. O `Motivo` de `os.falha` é a mensagem da exceção de domínio, que não traz dados pessoais (no máximo o nome de um insumo, quantidades ou o id de um cadastro inexistente); mensagens novas de domínio seguem a mesma regra.
 - **Ids nunca são tags.** `OrdemServicoId` e demais ids são atributos de log, nunca `group_by` de métrica.
-- **Serilog só na API.** UseCases, Controllers e Messaging usam `ILogger<T>` (ADR-001).
+- **Serilog só na API.** UseCases, Controllers, Messaging e NoSql usam `ILogger<T>` (ADR-001).
 - **Mudança no contrato**, como um evento, uma propriedade ou um valor novo ou renomeado:
   1. altere o código nos serviços afetados (`OrdemServicoLogEventos.cs` de cada repositório, ou o `ExecucaoLogEventos.cs` do Execução e Produção, e o ponto de log);
   2. atualize este documento e o `docs/observabilidade.md` dos repos OS-SERVICE, BILLING e EXECUTION;

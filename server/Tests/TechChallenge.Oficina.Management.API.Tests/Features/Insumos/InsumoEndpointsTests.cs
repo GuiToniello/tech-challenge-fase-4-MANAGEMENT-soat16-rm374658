@@ -1,5 +1,10 @@
-﻿using Moq;
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using TechChallenge.Oficina.Adapters.Features.Insumos;
+using TechChallenge.Oficina.Management.API.Features.Insumos;
 using TechChallenge.Oficina.UseCases.Features.Insumos.Commands;
 using TechChallenge.Oficina.UseCases.Features.Insumos.Queries;
 using TechChallenge.Oficina.UseCases.Features.Insumos.UseCases;
@@ -176,5 +181,59 @@ public sealed class InsumoEndpointsTests
         _insumoServiceMock.Verify(
             s => s.ExcluirAsync(It.Is<ExcluirInsumoCommand>(cmd => cmd.Id == insumoId), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task MapInsumoEndpoints_GetMovimentacoes_DeveRetornarOkComAsMovimentacoes()
+    {
+        var adapter = new InsumoAdapter();
+        var insumoController = new Controllers.Features.Insumos.InsumoController(_insumoServiceMock.Object, adapter);
+        var insumoId = Guid.NewGuid();
+        using var cts = new CancellationTokenSource();
+        IReadOnlyCollection<MovimentacaoEstoqueViewModel> movimentacoes =
+        [
+            new MovimentacaoEstoqueViewModel { Tipo = "Cadastro", Origem = "acao", Quantidade = 10, SaldoAnterior = 0, SaldoNovo = 10 },
+            new MovimentacaoEstoqueViewModel { Tipo = "DebitoOrdemServico", Origem = "evento", Quantidade = -1, SaldoAnterior = 10, SaldoNovo = 9, OrdemServicoId = Guid.NewGuid() }
+        ];
+
+        _insumoServiceMock
+            .Setup(s => s.ListarMovimentacoesAsync(It.Is<ListarMovimentacoesEstoqueQuery>(q => q.Id == insumoId), cts.Token))
+            .ReturnsAsync(movimentacoes);
+
+        var resultado = await insumoController.GetMovimentacoes(insumoId, cts.Token);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>>(resultado);
+        Assert.Equal(["Cadastro", "DebitoOrdemServico"], ok.Value!.Select(movimentacao => movimentacao.Tipo));
+    }
+
+    [Fact]
+    public async Task MapInsumoEndpoints_GetMovimentacoes_DeveRetornarOkComListaVazia_QuandoSemMovimentacoes()
+    {
+        var adapter = new InsumoAdapter();
+        var insumoController = new Controllers.Features.Insumos.InsumoController(_insumoServiceMock.Object, adapter);
+
+        _insumoServiceMock
+            .Setup(s => s.ListarMovimentacoesAsync(It.IsAny<ListarMovimentacoesEstoqueQuery>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var resultado = await insumoController.GetMovimentacoes(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Empty(Assert.IsType<Ok<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>>(resultado).Value!);
+    }
+
+    [Fact]
+    public async Task MapInsumoEndpoints_DeveMapearOGetDasMovimentacoesDoInsumo()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddScoped(_ => Mock.Of<Controllers.Features.Insumos.IInsumoController>());
+        await using var app = builder.Build();
+
+        app.MapInsumoEndpoints();
+
+        var rotas = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(fonte => fonte.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(endpoint => $"{endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Single()} {endpoint.RoutePattern.RawText}");
+        Assert.Contains("GET /api/insumos/{id:guid}/movimentacoes", rotas);
     }
 }

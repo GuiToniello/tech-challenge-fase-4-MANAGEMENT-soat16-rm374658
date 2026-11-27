@@ -6,7 +6,7 @@ Provisionar a rede e o Amazon EKS onde rodam a Management API, o OS Service (rep
 
 O Terraform gerencia a infraestrutura AWS, inclusive o API Gateway (state `foundation`), e, num state separado (`addons`), instala o Metrics Server e o Datadog Agent via Helm e cria os recursos do Datadog (módulo local `addons/modules/datadog/`). Os manifests da Management API ([k8s/](../k8s/kustomization.yaml)) são aplicados pelo GitHub Actions com `kubectl apply -k kubernetes/k8s` (seção [Aplicação dos manifests](#aplicação-dos-manifests)); os do OS Service, os do Billing e os do Execução e Produção, pelas pipelines dos repos OS-SERVICE, BILLING e EXECUTION.
 
-O banco de dados (RDS PostgreSQL) não é criado aqui: ele fica na pasta [DB/](../../DB/README.md) do monorepo, e os do OS Service, do Billing e do Execução e Produção, nos repos OS-SERVICE, BILLING e EXECUTION. As filas SQS ficam na pasta [SQS/](../../SQS/README.md). O build da imagem (a partir de `server/`) e o push para o ECR ficam nas pipelines da raiz ([.github/workflows/README.md](../../.github/workflows/README.md)).
+O banco de dados (RDS PostgreSQL) e a tabela DynamoDB do histórico de movimentações de estoque não são criados aqui: ficam na pasta [DB/](../../DB/README.md) do monorepo, e os do OS Service, do Billing e do Execução e Produção, nos repos OS-SERVICE, BILLING e EXECUTION. As filas SQS ficam na pasta [SQS/](../../SQS/README.md). O build da imagem (a partir de `server/`) e o push para o ECR ficam nas pipelines da raiz ([.github/workflows/README.md](../../.github/workflows/README.md)).
 
 ## Decisões consolidadas
 
@@ -29,7 +29,7 @@ O banco de dados (RDS PostgreSQL) não é criado aqui: ele fica na pasta [DB/](.
 Antes do primeiro Bootstrap, devem existir:
 
 1. Bucket S3 `terraform-state-soat16`, em `us-east-1`, com versionamento, criptografia, bloqueio público e leitura/escrita nas keys `techchallenge-oficina/fase-4/*` (`arn:aws:s3:::terraform-state-soat16/techchallenge-oficina/fase-4/*`) para o usuário `terraform`.
-2. Usuário IAM `terraform`, cujas access keys vão para os secrets do GitHub. Precisa de permissões para criar a foundation (VPC, IAM, EKS, API Gateway, NLB e o attachment dos target groups ao Auto Scaling Group; lista no [README da pasta](../README.md#3-pré-requisitos-manuais-uma-vez)), consultar o usuário `cluster_admin`, criar Access Entries no EKS e, no apply dos manifests, executar `eks:DescribeCluster`, `rds:DescribeDBInstances` e `ssm:GetParameter` (chave do SQS).
+2. Usuário IAM `terraform`, cujas access keys vão para os secrets do GitHub. Precisa de permissões para criar a foundation (VPC, IAM, EKS, API Gateway, NLB e o attachment dos target groups ao Auto Scaling Group; lista no [README da pasta](../README.md#3-pré-requisitos-manuais-uma-vez)), consultar o usuário `cluster_admin`, criar Access Entries no EKS e, no apply dos manifests, executar `eks:DescribeCluster`, `rds:DescribeDBInstances` e `ssm:GetParameter` (chave do usuário IAM da Management, que acessa o SQS e o DynamoDB).
 3. Usuário IAM `cluster_admin`. **Obrigatório**: a foundation o consulta por data source, e o `plan` falha se ele não existir.
 4. Secrets, Variables e o Environment `destroy` no GitHub, descritos em [.github/workflows/README.md](../../.github/workflows/README.md).
 5. Conta Datadog (trial de 14 dias), com a API Key e a Application Key nos secrets do GitHub, exceto com `DD_ENABLED=false` ([DATADOG.md](DATADOG.md#2-configuração)).
@@ -68,7 +68,7 @@ VPC 10.0.0.0/16 (tag Project = techchallenge-oficina)
        VPC Link e NLB interno; sem NAT e sem rota para a Internet
 ```
 
-Não há NAT Gateway. Os nodes usam saída pelas subnets públicas para acessar ECR e demais serviços AWS, inclusive as filas SQS das quatro APIs. Pela mesma saída, o Datadog Agent (namespace `datadog`) envia ao Datadog as métricas, os logs e os traces. No sentido inverso, os synthetics do Datadog chamam `GET /management/health`, `GET /os/health`, `GET /billing/health` e `GET /execution/health` pelo API Gateway, como qualquer cliente externo.
+Não há NAT Gateway. Os nodes usam saída pelas subnets públicas para acessar ECR e demais serviços AWS, inclusive as filas SQS e as tabelas DynamoDB das quatro APIs (o DynamoDB fica fora da VPC, e não há VPC endpoint). Pela mesma saída, o Datadog Agent (namespace `datadog`) envia ao Datadog as métricas, os logs e os traces. No sentido inverso, os synthetics do Datadog chamam `GET /management/health`, `GET /os/health`, `GET /billing/health` e `GET /execution/health` pelo API Gateway, como qualquer cliente externo.
 
 ### Security Groups
 
@@ -208,13 +208,13 @@ Os manifests são aplicados com Kustomize ([k8s/kustomization.yaml](../k8s/kusto
 Ordem no deploy, feita pelos jobs do Bootstrap (e na mesma ordem pelo Deploy):
 
 1. Foundation → addons (`kubernetes/infra/`).
-2. RDS (`DB/infra`).
+2. RDS e tabela DynamoDB do histórico de movimentações de estoque (`DB/infra`).
 3. Imagem da Management API no ECR (`server/`).
 4. Manifests (`kubernetes/k8s/`), com rollout restart.
 
-As filas (`SQS/infra`) são aplicadas em paralelo, antes dos manifests. Depois, os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
+As filas (`SQS/infra`, com os usuários IAM e a política da tabela DynamoDB da Management) são aplicadas em paralelo, antes dos manifests. Depois, os Bootstraps dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e por fim o Deploy do repo LAMBDA.
 
-O apply dos manifests ([_k8s-apply.yml](../../.github/workflows/_k8s-apply.yml), chamado pelo Bootstrap, pelo Deploy e pelo workflow manual [K8s Apply](../../.github/workflows/k8s-apply.yml), este com `restart-pods` padrão `true`) descobre o endpoint do RDS, monta o `kubernetes/k8s/.env` com a connection string e o `ResendSettings__ApiKey` a partir dos secrets do GitHub e com a chave do SQS lida do SSM, roda `kubectl apply -k kubernetes/k8s` e, se pedido, faz o `rollout restart` da API. O restart é necessário quando o Secret muda (`disableNameSuffixHash` mantém o mesmo nome) ou quando há imagem nova, já que o Deployment usa a tag `latest` com `imagePullPolicy: Always`. O Deploy aplica os manifests, com restart, em todo push na `main` que altere alguma parte (aplicação, `DB/infra`, `SQS/infra`, `kubernetes/infra` ou `kubernetes/k8s`).
+O apply dos manifests ([_k8s-apply.yml](../../.github/workflows/_k8s-apply.yml), chamado pelo Bootstrap, pelo Deploy e pelo workflow manual [K8s Apply](../../.github/workflows/k8s-apply.yml), este com `restart-pods` padrão `true`) descobre o endpoint do RDS, monta o `kubernetes/k8s/.env` com a connection string e o `ResendSettings__ApiKey` a partir dos secrets do GitHub e com a chave do usuário IAM da Management (SQS e DynamoDB) lida do SSM, roda `kubectl apply -k kubernetes/k8s` e, se pedido, faz o `rollout restart` da API. O restart é necessário quando o Secret muda (`disableNameSuffixHash` mantém o mesmo nome) ou quando há imagem nova, já que o Deployment usa a tag `latest` com `imagePullPolicy: Always`. O Deploy aplica os manifests, com restart, em todo push na `main` que altere alguma parte (aplicação, `DB/infra`, `SQS/infra`, `kubernetes/infra` ou `kubernetes/k8s`).
 
 O Service da Management API é `NodePort`, com porta fixa (30080) que o NLB da foundation usa como destino; o do OS Service usa a 30081, o do Billing, a 30082, e o do Execução e Produção, a 30083. Não há manifest de Ingress.
 
@@ -251,7 +251,7 @@ Rode o workflow [Destroy](../../.github/workflows/destroy.yml) com `confirm = de
 3. `billing-check`: falha se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` (repo BILLING) ainda existirem.
 4. `execution-check`: falha se o RDS `techchallenge-oficina-execution-postgres` ou o SG `techchallenge-oficina-execution-rds-sg` (repo EXECUTION) ainda existirem.
 5. `gate`: aprovação manual, depois dos quatro checks.
-6. SQS (`SQS/infra`), em paralelo com o RDS: filas, usuários IAM e parâmetros do SSM.
-7. RDS (`DB/infra`): os dados são perdidos.
+6. SQS (`SQS/infra`), em paralelo com o RDS: filas, usuários IAM (com as políticas inline, inclusive a da tabela DynamoDB da Management) e parâmetros do SSM.
+7. RDS e tabela DynamoDB (`DB/infra`): os dados e o histórico de movimentações de estoque são perdidos.
 8. Addons: Metrics Server, Datadog Agent e recursos do Datadog.
 9. Foundation, que leva junto o API Gateway, o VPC Link e o NLB. Nenhum Load Balancer é criado pelo Kubernetes, então não há o que limpar antes. Roda mesmo se o destroy dos addons falhar (por exemplo, com chaves do Datadog revogadas), para o EKS não ficar ligado gerando custo; o run fica vermelho. Não roda se o destroy do RDS falhar ou se o dos addons for cancelado. O bucket S3 do state e os ECRs ficam fora do `destroy`.

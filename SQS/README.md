@@ -53,20 +53,22 @@ Cada usuário tem uma policy inline chamada `sqs`, de menor privilégio ([iam.tf
 
 Nenhum dos usuários acessa as DLQs: analisar e reprocessar uma mensagem da DLQ é feito com um usuário administrativo (seção 7).
 
-Três usuários também recebem uma segunda policy inline, criada pelo `DB/infra` do repositório do serviço, para a própria tabela DynamoDB (só `dynamodb:PutItem` e `dynamodb:Query`): a mesma chave serve às filas e à tabela.
+Os quatro usuários também recebem uma segunda policy inline, para a própria tabela DynamoDB (só `dynamodb:PutItem` e `dynamodb:Query`): a mesma chave serve às filas e à tabela. A da Management é criada aqui, junto do usuário; as dos outros três, pelo `DB/infra` do repositório do serviço.
 
 | Usuário | Policy | Tabela | Criada por |
 |---|---|---|---|
+| `techchallenge-oficina-management-sqs` | `dynamodb-historico-estoque` | `techchallenge-oficina-management-estoque-historico` (histórico de movimentações de estoque) | Este repo, `SQS/infra/iam.tf` ([ADR-027](../docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)) |
 | `techchallenge-oficina-os-service-sqs` | `dynamodb-historico-saga` | `techchallenge-oficina-os-saga-historico` (histórico da saga) | Repo OS-SERVICE ([ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md)) |
 | `techchallenge-oficina-billing-sqs` | `dynamodb-historico-pagamentos` | `techchallenge-oficina-billing-pagamentos-historico` (histórico de pagamentos) | Repo BILLING ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) |
 | `techchallenge-oficina-execution-sqs` | `dynamodb-historico-producao` | `techchallenge-oficina-execution-producao-historico` (linha do tempo da produção) | Repo EXECUTION ([ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md)) |
 
-Essas policies não são gerenciadas aqui. Se este Terraform recriar um desses usuários, a policy dele some junto, e é preciso rodar de novo o Bootstrap do OS-SERVICE, do BILLING ou do EXECUTION (o Deploy deles só reaplica o `DB/infra` quando os arquivos mudam).
+- **Management:** a policy é gerenciada aqui ([iam.tf](infra/iam.tf)), no mesmo state do usuário, e não no `DB/infra` deste monorepo, onde fica a tabela: o `DB/infra` e o `SQS/infra` rodam em paralelo nas pipelines, e uma policy lá correria contra a criação do usuário. Se o usuário for recriado, a policy volta no mesmo apply. O ARN da tabela é montado pelo nome, repetido no [locals.tf](infra/locals.tf): ele precisa ser igual ao do [DB/infra/dynamodb.tf](../DB/infra/dynamodb.tf).
+- **OS Service, Billing e Execução e Produção:** as policies vêm dos repositórios deles e não são gerenciadas aqui. Se este Terraform recriar um desses usuários, a policy dele some junto, e é preciso rodar de novo o Bootstrap do OS-SERVICE, do BILLING ou do EXECUTION (o Deploy deles só reaplica o `DB/infra` quando os arquivos mudam).
 
 ### 1.2 Chaves no SSM e no Secret dos pods
 
 - O Terraform cria uma access key para cada usuário e guarda o ID e o segredo no SSM Parameter Store, como SecureString no tier Standard ([ssm.tf](infra/ssm.tf)).
-- O `_k8s-apply.yml` **de cada repositório** lê só os parâmetros do próprio serviço e grava os valores no Secret do Kubernetes como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`, mascarados no log. O SDK da AWS lê essas variáveis sozinho, e a região vem de `AWS_REGION`, no ConfigMap.
+- O `_k8s-apply.yml` **de cada repositório** lê só os parâmetros do próprio serviço e grava os valores no Secret do Kubernetes como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`, mascarados no log. A mesma chave serve às filas e à tabela DynamoDB do serviço. O SDK da AWS lê essas variáveis sozinho, e a região vem de `AWS_REGION`, no ConfigMap.
   - Management: Secret `oficina-api-secrets`, namespace `oficina` ([kubernetes/k8s/README.md](../kubernetes/k8s/README.md)).
   - OS Service: Secret `os-service-api-secrets`, namespace `os-service` (repo OS-SERVICE).
   - Billing: Secret `billing-api-secrets`, namespace `billing` (repo BILLING).
@@ -106,7 +108,7 @@ Os repos OS-SERVICE, BILLING e EXECUTION não aplicam este Terraform: o `_k8s-ap
 |---|---|
 | `SQS/infra` | `techchallenge-oficina/fase-4/sqs.tfstate`, com lock nativo (`use_lockfile`) |
 
-**Permissões do usuário IAM `terraform`** (o mesmo das outras pastas): além do state em `techchallenge-oficina/fase-4/*`, ele precisa criar e apagar filas SQS, usuários IAM com policy inline e access key, e parâmetros SecureString no SSM. O apply dos manifests lê os parâmetros com `ssm:GetParameter` (com `--with-decryption`).
+**Permissões do usuário IAM `terraform`** (o mesmo das outras pastas): além do state em `techchallenge-oficina/fase-4/*`, ele precisa criar e apagar filas SQS, usuários IAM com policy inline e access key, e parâmetros SecureString no SSM. A policy `dynamodb-historico-estoque` da Management usa `iam:PutUserPolicy`, `iam:GetUserPolicy` e `iam:DeleteUserPolicy` (hoje o usuário é administrador). O apply dos manifests lê os parâmetros com `ssm:GetParameter` (com `--with-decryption`).
 
 ## 4. Custo
 
@@ -142,8 +144,9 @@ O `.terraform.lock.hcl` **é** versionado e fixa o provider AWS (6.66.0).
 
 ## 7. Troubleshooting
 
-- **Apply dos manifests falha em "Adicionar a chave do SQS"** (no OS-SERVICE, no BILLING e no EXECUTION, o passo se chama "Adicionar a chave do usuário IAM do OS Service (SQS e DynamoDB)", "Adicionar a chave do usuário IAM do Billing (SQS e DynamoDB)" e "Adicionar a chave do usuário IAM do Execução e Produção (SQS e DynamoDB)") (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
+- **Apply dos manifests falha em "Adicionar a chave do usuário IAM da Management (SQS e DynamoDB) ao kubernetes/k8s/.env"** (no OS-SERVICE, no BILLING e no EXECUTION, o passo se chama "Adicionar a chave do usuário IAM do OS Service (SQS e DynamoDB)", "Adicionar a chave do usuário IAM do Billing (SQS e DynamoDB)" e "Adicionar a chave do usuário IAM do Execução e Produção (SQS e DynamoDB)") (`Parâmetro ... não encontrado no SSM`): o `SQS/infra` ainda não foi aplicado. Rode o Bootstrap deste monorepo.
 - **Pods com `integracao.falha` (`sqs`) e erro de credencial no `error.*`**: o Secret tem uma chave que não existe mais, porque o SQS foi recriado depois do último apply dos manifests. O Deploy e o Bootstrap deste monorepo já atualizam o Secret da Management; os do OS Service, do Billing e do Execução e Produção, não. Rode o K8s Apply dos repos OS-SERVICE, BILLING e EXECUTION (ou o do repositório afetado) com `restart-pods = true`.
 - **OS Service, Billing ou Execução e Produção com `integracao.falha` (`dynamodb`) e acesso negado no `error.*`**: o usuário IAM do serviço foi recriado aqui e perdeu a policy do DynamoDB, que vem do repositório do serviço. Rode o Bootstrap do OS-SERVICE, do BILLING ou do EXECUTION (ele reaplica a policy e os manifests com a chave nova).
+- **Management com `integracao.falha` (`dynamodb`) e acesso negado no `error.*`**: confira se a policy `dynamodb-historico-estoque` está no usuário `techchallenge-oficina-management-sqs` e se o nome da tabela no `SQS/infra` é o mesmo do `DB/infra`. A policy vem deste Terraform, junto do usuário: rode o Bootstrap deste monorepo, que reaplica o `SQS/infra`, o `DB/infra` e os manifests.
 - **Mensagens paradas na DLQ**: veja o motivo nos logs `integracao.falha` com `Operacao` = `consumo` ([docs/observabilidade.md](../docs/observabilidade.md)). Depois de corrigir a causa, reenvie as mensagens para a fila de origem pelo console do SQS (redrive da DLQ), com um usuário administrativo. Não há reprocessamento automático.
 - **`Error acquiring the state lock`**: outro apply ou destroy está rodando. Se o lock ficou preso depois de um run cancelado, rode `terraform force-unlock <LOCK_ID>` em `SQS/infra/` ou apague o objeto `techchallenge-oficina/fase-4/sqs.tfstate.tflock` do bucket.

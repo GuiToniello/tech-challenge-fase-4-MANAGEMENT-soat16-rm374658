@@ -50,7 +50,7 @@ Usar um banco relacional **PostgreSQL no Amazon RDS**, com a configuração da [
   - rejeitadas por exigirem refazer as migrations e o ambiente local; o SQL Server também tem licença paga.
 - DynamoDB ou MongoDB:
   - rejeitadas porque não garantem relacionamentos no banco, e o modelo da oficina é cheio deles.
-  - Na fase 4, o DynamoDB passou a ser usado no Billing, no OS Service e no Execução e Produção, cada um com a própria tabela, para registros complementares e descartáveis, sem relacionamentos: o histórico dos eventos de pagamento, o histórico da saga e a linha do tempo da produção. O banco de cada serviço continua sendo o PostgreSQL ([ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md), repo BILLING, [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md), repo EXECUTION, e [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md), repo OS-SERVICE).
+  - Na fase 4, o DynamoDB passou a ser usado nos quatro serviços, cada um com a própria tabela, para registros complementares e descartáveis, sem relacionamentos: o histórico de movimentações de estoque (Management), o histórico dos eventos de pagamento (Billing), o histórico da saga (OS Service) e a linha do tempo da produção (Execução e Produção). O banco de cada serviço continua sendo o PostgreSQL ([ADR-027](ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md), neste monorepo, [ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md), repo BILLING, [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md), repo EXECUTION, e [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md), repo OS-SERVICE).
 - PostgreSQL num pod do EKS:
   - rejeitada porque backup, atualização e disco ficariam por conta do time, ocupando um cluster pequeno (2 nós `t3.small`).
 - Um banco compartilhado entre a Management e os outros serviços (fase 4):
@@ -68,6 +68,7 @@ Usar um banco relacional **PostgreSQL no Amazon RDS**, com a configuração da [
 - **ADR-024**: o histórico de pagamentos do Billing no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo BILLING: [ADR-024](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md).
 - **ADR-025**: a linha do tempo da produção do Execução e Produção no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo EXECUTION: [ADR-025](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md).
 - **ADR-026**: o histórico da saga do OS Service no Amazon DynamoDB, complementar ao PostgreSQL dele, no repo OS-SERVICE: [ADR-026](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-026-Historico-da-Saga-no-DynamoDB.md).
+- **ADR-027**: o histórico de movimentações de estoque da Management no Amazon DynamoDB, complementar ao saldo da tabela `insumos`, neste monorepo: [ADR-027](ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md).
 
 ## Modelo de dados
 
@@ -113,7 +114,7 @@ O orçamento e os serviços dele (antes `orcamentos` e `orcamentos_servicos`) fi
 | `clientes` | Clientes da oficina | `Id` (chave), `nome_completo`, `identificacao` (CPF ou CNPJ, só números, único), `tipo_identificacao` (1 = CPF, 2 = CNPJ) e `email` (opcional) |
 | `veiculos` | Veículos dos clientes | `Id` (chave), `placa` (padrão Mercosul, única), `marca`, `modelo`, `ano`, `renavam` e `cliente_id` |
 | `servicos` | Catálogo de serviços | `Id` (chave), `nome` e `descricao` |
-| `insumos` | Peças e materiais, com o estoque | `Id` (chave), `nome`, `fabricante`, `quantidade_disponivel` (estoque) e `valor_unitario` |
+| `insumos` | Peças e materiais, com o estoque | `Id` (chave), `nome`, `fabricante`, `quantidade_disponivel` (estoque: só o saldo atual; o histórico das movimentações fica no DynamoDB, ADR-027) e `valor_unitario` |
 | `servicos_insumos` | Peças que cada serviço usa | `servico_id` e `insumo_id` (chave composta) e `quantidade` |
 | `ordens_servico_referencias` | O que a Management sabe de cada OS do OS Service, recebido por eventos | `ordem_servico_id` (chave), `cliente_id`, `veiculo_id`, `status` (tabela abaixo), `servico_ids` (`uuid[]`) e `estoque_debitado` (`true` depois do débito de estoque do pagamento aprovado, ADR-012) |
 

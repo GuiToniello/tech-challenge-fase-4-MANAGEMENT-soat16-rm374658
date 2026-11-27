@@ -1,10 +1,10 @@
-# DB: Amazon RDS PostgreSQL
+# DB: Amazon RDS PostgreSQL e Amazon DynamoDB
 
-Infraestrutura do banco de dados do projeto **Tech Challenge Oficina** (SOAT16, fase 4). Aqui fica o Amazon RDS PostgreSQL, criado com Terraform em [infra/](infra) e aplicado pelas pipelines do monorepo ([.github/workflows](../.github/workflows/README.md)).
+Infraestrutura do banco de dados do projeto **Tech Challenge Oficina** (SOAT16, fase 4). Aqui ficam o Amazon RDS PostgreSQL e a tabela do Amazon DynamoDB com o histórico de movimentações de estoque da Management ([ADR-027](../docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md)), criados com Terraform em [infra/](infra) e aplicados pelas pipelines do monorepo ([.github/workflows](../.github/workflows/README.md)). A política IAM da tabela não fica aqui: ela vai para o usuário IAM da Management, no [SQS/](../SQS/README.md) (seção 1).
 
-A pasta tem o próprio Terraform state e não lê o state de outra pasta. Para rodar, porém, depende do cluster EKS e da rede criados em [kubernetes/infra/foundation](../kubernetes/infra/README.md) (seção 3). O schema (tabelas) é criado pela aplicação ([server/](../server)), quando a Management API sobe.
+A pasta tem o próprio Terraform state e não lê o state de outra pasta. Para rodar, porém, depende do cluster EKS e da rede criados em [kubernetes/infra/foundation](../kubernetes/infra/README.md) (seção 3). O schema do PostgreSQL (tabelas) é criado pela aplicação ([server/](../server)), quando a Management API sobe.
 
-Este é o banco da Management. Desde a fase 4, o OS Service, o Billing e o Execução e Produção têm o próprio RDS, criado na mesma rede e no mesmo padrão desta pasta: `techchallenge-oficina-os-postgres` (banco `oficina_os`), pelo [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), `techchallenge-oficina-billing-postgres` (banco `oficina_billing`), pelo [repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), e `techchallenge-oficina-execution-postgres` (banco `oficina_execution`), pelo [repo EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658). Um serviço não acessa o banco do outro ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md), [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) e [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md)).
+Este é o banco da Management. Desde a fase 4, o OS Service, o Billing e o Execução e Produção têm o próprio RDS, criado na mesma rede e no mesmo padrão desta pasta: `techchallenge-oficina-os-postgres` (banco `oficina_os`), pelo [repo OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), `techchallenge-oficina-billing-postgres` (banco `oficina_billing`), pelo [repo BILLING](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658), e `techchallenge-oficina-execution-postgres` (banco `oficina_execution`), pelo [repo EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658). Cada um também tem a própria tabela DynamoDB, criada no repositório dele. Um serviço não acessa o banco do outro ([ADR-019](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md), [ADR-021](https://github.com/GuiToniello/tech-challenge-fase-4-BILLING-soat16-rm374658/blob/main/docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) e [ADR-023](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md)).
 
 > Na fase 3, esta pasta era um repositório separado (`tech-challenge-fase-3-DB-soat16-rm374658`).
 
@@ -17,8 +17,11 @@ Tudo fica na AWS, região `us-east-1`:
 | `aws_db_instance` | `techchallenge-oficina-postgres` | PostgreSQL, `db.t3.micro`, 20 GiB `gp3` criptografado, single-AZ, sem acesso público, porta `5432`, database `oficina`, usuário `sa` |
 | `aws_db_subnet_group` | `techchallenge-oficina-rds-subnets` | Usa as duas subnets privadas criadas pela foundation (duas AZs) |
 | `aws_security_group` | `techchallenge-oficina-rds-sg` | Esta pasta cria só a entrada na porta `5432` a partir do SG dos nodes do EKS. O repo LAMBDA adiciona a própria regra (seção 3) |
+| `aws_dynamodb_table` | `techchallenge-oficina-management-estoque-historico` | Histórico de movimentações de estoque ([dynamodb.tf](infra/dynamodb.tf)): sob demanda (`PAY_PER_REQUEST`), chave de partição `InsumoId` (S) e de ordenação `OcorridoEm` (S), TTL em `ExpiraEm` (180 dias), sem proteção contra exclusão, sem PITR e sem streams. Fica fora da VPC: os pods chegam a ela pela saída das subnets públicas, como chegam ao SQS |
 
-É um ambiente acadêmico e descartável: `deletion_protection = false`, `skip_final_snapshot = true` e `backup_retention_period = 0`. Por isso, **um destroy apaga todos os dados**.
+É um ambiente acadêmico e descartável: `deletion_protection = false`, `skip_final_snapshot = true` e `backup_retention_period = 0`, e a tabela DynamoDB também não tem proteção contra exclusão. Por isso, **um destroy apaga todos os dados**, inclusive o histórico de movimentações.
+
+A tabela é complementar: o saldo de cada insumo continua no PostgreSQL (`insumos.quantidade_disponivel`), que é a fonte da verdade, e a API grava no DynamoDB em *best-effort* (ADR-027). A política inline `dynamodb-historico-estoque` (só `dynamodb:PutItem` e `dynamodb:Query` nesta tabela) fica no [SQS/infra/iam.tf](../SQS/infra/iam.tf), no mesmo state do usuário IAM da Management (`techchallenge-oficina-management-sqs`), porque o `DB/infra` e o `SQS/infra` rodam em paralelo nas pipelines. O nome da tabela é repetido lá, no ARN da política: mudar o nome exige mudar os dois.
 
 ```mermaid
 flowchart TD
@@ -33,10 +36,12 @@ flowchart TD
       end
     end
 
+    DDB[(Amazon DynamoDB\ntechchallenge-oficina-management-estoque-historico\nhistorico de movimentacoes de estoque)]
     S3[(S3 terraform-state-soat16\ntechchallenge-oficina/fase-4/database.tfstate)]
   end
 
   Nodes -->|PostgreSQL 5432\nSG techchallenge-oficina-rds-sg| RDS
+  Nodes -->|HTTPS, pela saida das subnets publicas\nPutItem e Query| DDB
 ```
 
 ## 2. Escolha do banco
@@ -48,10 +53,11 @@ Na fase 4, a migration `ExtrairOrdemServico` tirou deste banco as tabelas de OS,
 A decisão está documentada em [docs/](../docs):
 - [ADR-017: PostgreSQL no Amazon RDS e Modelo de Dados](../docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md): justificativa formal, diagrama ER e explicação de cada relacionamento.
 - [RFC-002: Escolha do banco de dados](../docs/rfc/RFC-002-Escolha-do-Banco-de-Dados.md): as opções comparadas (Aurora, MySQL, SQL Server, DynamoDB, MongoDB e PostgreSQL dentro do EKS).
+- [ADR-027: Histórico de Movimentações de Estoque no Amazon DynamoDB](../docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md): a tabela DynamoDB, complementar ao saldo do PostgreSQL, e por que a política dela fica no `SQS/infra`.
 
 A visão geral do sistema inteiro está no [docs/arquitetura.md](../docs/arquitetura.md).
 
-Os detalhes do acesso a dados e das migrations estão na [ADR-007](../docs/adr/ADR-007-EFCore-com-PostgreSQL.md) (*EF Core com PostgreSQL*) e na [ADR-009](../docs/adr/ADR-009-Migracoes-Automaticas-no-Startup.md) (*Migrações automáticas no startup*). Esta pasta só cria a instância e o database vazio `oficina`. A Management API cria as tabelas quando sobe.
+Os detalhes do acesso a dados e das migrations estão na [ADR-007](../docs/adr/ADR-007-EFCore-com-PostgreSQL.md) (*EF Core com PostgreSQL*) e na [ADR-009](../docs/adr/ADR-009-Migracoes-Automaticas-no-Startup.md) (*Migrações automáticas no startup*). Esta pasta só cria a instância e o database vazio `oficina`, além da tabela DynamoDB. A Management API cria as tabelas do PostgreSQL quando sobe; na AWS, ela nunca cria nem descreve a tabela DynamoDB, só grava e consulta.
 
 ## 3. Dependências
 
@@ -59,7 +65,7 @@ Os detalhes do acesso a dados e das migrations estão na [ADR-007](../docs/adr/A
 
 | Operação | Ordem |
 |---|---|
-| Subir | **Bootstrap** deste monorepo: testes → foundation (rede, EKS e API Gateway) → addons → **DB** → imagem no ECR → K8s Apply (manifests + Secret da API com o endpoint do RDS); o SQS em paralelo. Depois, os **Bootstraps** dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e o **Deploy** do repo LAMBDA |
+| Subir | **Bootstrap** deste monorepo: testes → foundation (rede, EKS e API Gateway) → addons → **DB** (RDS e tabela DynamoDB) → imagem no ECR → K8s Apply (manifests + Secret da API com o endpoint do RDS); o SQS (com a política da tabela) em paralelo. Depois, os **Bootstraps** dos repos OS-SERVICE e EXECUTION, nesta ordem, e o do BILLING (a qualquer momento), e o **Deploy** do repo LAMBDA |
 | Destruir | **Destroy** dos repos LAMBDA, OS-SERVICE, BILLING e EXECUTION → **Destroy** deste monorepo: **DB** → addons → foundation (o SQS em paralelo com o DB) |
 
 - O DB roda depois do cluster porque usa a VPC, as subnets privadas e o SG dos nodes criados pela foundation. No Destroy, ele sai antes: a regra do RDS referencia o SG dos nodes, e as subnets privadas têm as ENIs do RDS. Se o destroy do DB falhar, o da foundation não roda.
@@ -93,10 +99,11 @@ O Secret da API (`oficina-api-secrets`, com a connection string) é gerado pelo 
 | Porta | `5432` | Connection string |
 | Senha | Secret `RDS_PASSWORD` | Um só secret no monorepo, usado pelo Terraform do DB e pelo K8s Apply. O repo LAMBDA precisa do **mesmo valor** |
 | SG do RDS | `techchallenge-oficina-rds-sg` | O repo LAMBDA adiciona neste SG a própria regra de entrada na porta `5432` |
+| Tabela DynamoDB | `techchallenge-oficina-management-estoque-historico` | `DynamoDbSettings__TabelaHistoricoEstoque` no ConfigMap da API ([kubernetes/k8s/README.md](../kubernetes/k8s/README.md)) e o ARN da política `dynamodb-historico-estoque`, no `SQS/infra` |
 
 As regras do SG do RDS são recursos separados (`aws_vpc_security_group_ingress_rule` / `aws_vpc_security_group_egress_rule`), não blocos inline. Assim, a regra criada pelo repo LAMBDA não é removida no próximo apply do DB.
 
-Outputs do Terraform: `rds_identifier`, `rds_endpoint`, `rds_port`, `rds_database` e `rds_security_group_id`.
+Outputs do Terraform: `rds_identifier`, `rds_endpoint`, `rds_port`, `rds_database`, `rds_security_group_id`, `dynamodb_historico_estoque_nome` e `dynamodb_historico_estoque_arn`.
 
 ## 4. Pré-requisitos (manuais, uma vez)
 
@@ -110,6 +117,7 @@ Outputs do Terraform: `rds_identifier`, `rds_endpoint`, `rds_port`, `rds_databas
      - `ec2:ModifySecurityGroupRules`, `ec2:CreateTags`, `ec2:DeleteTags`
    - EKS: `eks:DescribeCluster`, para achar a VPC pelo cluster (`data "aws_eks_cluster"`).
    - RDS: `rds:*DBInstance*`, `rds:*DBSubnetGroup*`, `rds:AddTagsToResource`, `rds:RemoveTagsFromResource`, `rds:ListTagsForResource`. Se for o primeiro RDS da conta, também `iam:CreateServiceLinkedRole`.
+   - DynamoDB: criar, descrever, alterar (TTL e tags) e apagar a tabela `techchallenge-oficina-management-estoque-historico` (hoje o usuário `terraform` é administrador). A política da tabela, no `SQS/infra`, usa as permissões de IAM do [SQS/README.md](../SQS/README.md).
    - S3: `s3:GetObject`, `s3:PutObject` e `s3:DeleteObject` em `arn:aws:s3:::terraform-state-soat16/techchallenge-oficina/fase-4/*` (states e locks de todas as pastas do Terraform do monorepo), mais `s3:ListBucket` no bucket.
 4. **Secrets e Variables do GitHub**: veja a seção 5.
 5. **Environment `destroy`** (Settings → Environments). Crie **antes** do primeiro Destroy, com você como *Required reviewer* e *Deployment branches* restrito a `main`. Se ele não existir, o GitHub cria na hora, sem proteção. Não dispare o Destroy com um Deploy ou Bootstrap em andamento (veja a seção 9).
@@ -145,7 +153,7 @@ O DB não tem workflows próprios: roda nas pipelines do monorepo, pelo workflow
 | **Deploy**, em push na `main` com mudança em `DB/infra/**` ou no `_terraform.yml` | `apply-db` e, em seguida, o K8s Apply com restart, para o Secret receber o endpoint do RDS |
 | **Destroy** (manual, `confirm = destroy` + aprovação) | `terraform destroy` do DB antes dos addons e da foundation |
 
-Apply e destroy só rodam a partir da `main` e esperam até 15 min por um lock do state (`-lock-timeout=15m`).
+Apply e destroy só rodam a partir da `main` e esperam até 15 min por um lock do state (`-lock-timeout=15m`). A tabela DynamoDB segue os mesmos jobs do RDS, sem job novo.
 
 Enquanto o cluster EKS não existir (antes do primeiro Bootstrap ou depois do Destroy), o `plan-db` dos PRs e o `apply-db` do push falham, porque o DB acha a VPC pelo cluster. O `validate-db` continua verde, então os PRs podem ser mergeados. Quando o ambiente voltar, rode o **Bootstrap** para aplicar o estado da `main`. **Não use "Re-run" em um Deploy antigo que falhou**: o re-run aplica o commit daquele run, que pode estar desatualizado, e desfaria mudanças mergeadas depois. O Bootstrap sempre aplica a HEAD da `main`.
 
@@ -168,7 +176,7 @@ Para validar sem acessar a AWS: `terraform init -backend=false` e `terraform val
 
 ## 8. Destruição e custos
 
-O RDS gera custo enquanto existe. Para remover, rode o workflow **Destroy** do monorepo com `confirm = destroy` e aprove no environment. Ele destrói o ambiente inteiro (SQS, DB, addons e foundation): não há um destroy só do banco. Antes, rode o Destroy do repo LAMBDA e os dos repos OS-SERVICE, BILLING e EXECUTION, que removem os RDS desses serviços (seção 3). O bucket S3 do state não é removido.
+O RDS gera custo enquanto existe. A tabela DynamoDB é sob demanda: é cobrada por requisição e por armazenamento, o que, com poucos itens e a expiração em 180 dias, fica perto de zero. Para remover, rode o workflow **Destroy** do monorepo com `confirm = destroy` e aprove no environment. Ele destrói o ambiente inteiro (SQS, DB, addons e foundation), inclusive a tabela DynamoDB e o histórico: não há um destroy só do banco. Antes, rode o Destroy do repo LAMBDA e os dos repos OS-SERVICE, BILLING e EXECUTION, que removem os RDS desses serviços (seção 3). O bucket S3 do state não é removido.
 
 ## 9. Troubleshooting
 

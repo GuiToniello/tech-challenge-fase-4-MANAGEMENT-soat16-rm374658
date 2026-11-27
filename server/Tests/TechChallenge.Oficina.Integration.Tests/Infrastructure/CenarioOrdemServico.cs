@@ -87,6 +87,14 @@ internal static class CenarioOrdemServico
     public static Task<ResultadoProcessamentoEvento> AprovarPagamentoAsync(IntegrationTestFixture fixture, Guid ordemServicoId, decimal valor = 60m)
         => ProcessarAsync(fixture, new PagamentoAprovado(ordemServicoId, Guid.NewGuid(), valor));
 
+    // Historico de movimentacoes de estoque do insumo pelo controller (GET /api/insumos/{id}/movimentacoes), em ordem cronologica
+    public static async Task<MovimentacaoEstoqueViewModel[]> ObterMovimentacoesAsync(IntegrationTestFixture fixture, Guid insumoId)
+    {
+        var resultado = Assert.IsType<Ok<IReadOnlyCollection<MovimentacaoEstoqueViewModel>>>(await fixture.CriarInsumosEndpoints().GetMovimentacoes(insumoId, CancellationToken.None));
+
+        return resultado.Value!.ToArray();
+    }
+
     private static Task<ResultadoProcessamentoEvento> ProcessarAsync<TEvento>(IntegrationTestFixture fixture, TEvento evento)
         => fixture.CriarEventosController().ProcessarAsync(typeof(TEvento).Name, JsonSerializer.Serialize(evento, OpcoesJson), CancellationToken.None);
 }

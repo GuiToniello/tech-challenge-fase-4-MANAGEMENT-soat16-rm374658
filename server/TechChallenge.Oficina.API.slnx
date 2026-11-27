@@ -4,6 +4,7 @@
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.DB/TechChallenge.Oficina.DB.csproj" Id="71fe5663-eba3-4094-a2e6-eafa02c7eae3" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Email/TechChallenge.Oficina.Email.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Messaging/TechChallenge.Oficina.Messaging.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.NoSql/TechChallenge.Oficina.NoSql.csproj" />
   </Folder>
   <Folder Name="/2 - Interface Adapters/">
     <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Adapters/TechChallenge.Oficina.Adapters.csproj" />
@@ -34,6 +35,7 @@
     <File Path="../docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md" />
     <File Path="../docs/adr/ADR-018-Monorepo-e-API-Unica-Management.md" />
     <File Path="../docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md" />
+    <File Path="../docs/adr/ADR-027-Historico-de-Movimentacoes-de-Estoque-no-DynamoDB.md" />
     <File Path="../docs/adr/INDICE.md" />
     <File Path="../docs/rfc/RFC-004-Comunicacao-entre-Microsservicos.md" />
   </Folder>
@@ -51,5 +53,6 @@
     <Project Path="Tests/TechChallenge.Oficina.Email.Tests/TechChallenge.Oficina.Email.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Integration.Tests/TechChallenge.Oficina.Integration.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Messaging.Tests/TechChallenge.Oficina.Messaging.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.NoSql.Tests/TechChallenge.Oficina.NoSql.Tests.csproj" />
   </Folder>
 </Solution>

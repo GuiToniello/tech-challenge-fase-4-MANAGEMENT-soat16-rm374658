@@ -59,6 +59,16 @@ namespace TechChallenge.Oficina.Controllers.Features.Insumos
             return _insumoAdapter.Adapt(result);
         }
 
+        // Falha do DynamoDB ja sai como integracao.falha no gateway do historico e segue para o tratamento global (500)
+        public async Task<object> GetMovimentacoes(Guid id, CancellationToken cancellationToken)
+        {
+            var query = new ListarMovimentacoesEstoqueQuery { Id = id };
+            var movimentacoes = await _insumoUsecases.ListarMovimentacoesAsync(query, cancellationToken);
+            var result = InsumoResult.From(movimentacoes);
+
+            return _insumoAdapter.Adapt(result);
+        }
+
         public async Task<object> Put(AtualizarInsumoCommand command, CancellationToken cancellationToken)
         {
             try

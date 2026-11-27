@@ -107,7 +107,8 @@ jobs:
   # ---------- Push na main ----------
 
   # Aplica só as partes que mudaram, sempre na ordem: foundation → addons → DB → imagem → manifests.
-  # O SQS (filas, usuários IAM e chaves no SSM) não depende da VPC nem do EKS: roda em paralelo, antes dos manifests
+  # O SQS (filas, usuários IAM, chaves no SSM e a política DynamoDB da Management) não depende da VPC nem do EKS:
+  # roda em paralelo, antes dos manifests
   changes:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -159,7 +160,8 @@ jobs:
       command: apply
     secrets: inherit
 
-  # O RDS usa a VPC, as subnets e o SG dos nodes criados pela foundation
+  # O RDS usa a VPC, as subnets e o SG dos nodes criados pela foundation. A tabela DynamoDB do histórico de
+  # estoque também fica no DB/infra; a política dela fica no SQS/infra, com o usuário IAM da Management
   apply-db:
     needs: [changes, apply-addons]
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.db == 'true' }}
@@ -169,7 +171,7 @@ jobs:
       command: apply
     secrets: inherit
 
-  # Filas e chaves que o apply-k8s grava no Secret (lidas do SSM)
+  # Filas e chaves que o apply-k8s grava no Secret (lidas do SSM), e a política DynamoDB da Management
   apply-sqs:
     needs: changes
     if: needs.changes.outputs.sqs == 'true'
